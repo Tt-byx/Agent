@@ -84,6 +84,18 @@ rag:
   # LangChain4j 返回 similarity score（越大越相关），所以这里是下限。
   min-score: 0.3
   max-chunks-per-doc: 2000
+  # 混合检索每路取的候选池大小（融合后取 top-k）
+  pool-size: 20
+  # 对话链路使用的检索模式：vector / hybrid / hybrid+rerank
+  mode: hybrid+rerank
+
+# Rerank（硅基流动 bge-reranker-v2-m3）。未配置 key 时自动跳过重排，不影响可用性。
+rerank:
+  enabled: ${SCENIC_RERANK_ENABLED:true}
+  base-url: ${SCENIC_RERANK_BASE_URL:https://api.siliconflow.cn/v1}
+  api-key: ${SCENIC_RERANK_API_KEY:${SCENIC_EMBEDDING_API_KEY:}}
+  model-name: ${SCENIC_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
+  timeout-seconds: 30
 
 # WebSocket 配置
 websocket:

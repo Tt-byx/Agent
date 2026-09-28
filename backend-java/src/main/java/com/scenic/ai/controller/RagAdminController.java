@@ -1,8 +1,10 @@
 package com.scenic.ai.controller;
 
 import com.scenic.ai.dto.Result;
+import com.scenic.ai.rag.eval.RagEvalRunner;
 import com.scenic.ai.rag.ingest.DocumentIngestionService;
 import com.scenic.ai.rag.ingest.DocumentTextExtractor;
+import com.scenic.ai.rag.retrieve.Bm25Index;
 import com.scenic.ai.rag.retrieve.RagRetriever;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +37,12 @@ public class RagAdminController {
 
     @Autowired
     private RagRetriever ragRetriever;
+
+    @Autowired
+    private Bm25Index bm25Index;
+
+    @Autowired
+    private RagEvalRunner evalRunner;
 
     @Value("${scenic.upload.dir:D:/scenic_uploads}")
     private String uploadDir;
@@ -106,6 +114,19 @@ public class RagAdminController {
     @PostMapping("/probe")
     public Result<?> probe(@RequestParam String query) {
         return Result.success(ragRetriever.retrieve(query));
+    }
+
+    /** 重建 BM25 关键词索引（文档增删后调用） */
+    @PostMapping("/reload-index")
+    public Result<?> reloadIndex() {
+        bm25Index.reload();
+        return Result.success(Map.of("loaded", bm25Index.isLoaded(), "chunks", bm25Index.size()));
+    }
+
+    /** 检索质量评测：对比 纯向量 / 混合 / 混合+rerank 的 Recall@5 */
+    @PostMapping("/eval")
+    public Result<?> eval() {
+        return Result.success(evalRunner.run());
     }
 
     private String extension(Path path) {

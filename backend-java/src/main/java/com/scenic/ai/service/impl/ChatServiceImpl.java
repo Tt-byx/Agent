@@ -8,7 +8,7 @@ import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
-import com.scenic.ai.rag.retrieve.RagRetriever;
+import com.scenic.ai.rag.retrieve.HybridRetriever;
 import com.scenic.ai.service.ChatService;
 import com.scenic.ai.util.SentimentAnalyzer;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +31,7 @@ public class ChatServiceImpl implements ChatService {
     private ScenicAssistant scenicAssistant;
 
     @Autowired
-    private RagRetriever ragRetriever;
+    private HybridRetriever ragRetriever;
 
     @Autowired
     private ConversationMapper conversationMapper;

@@ -9,7 +9,7 @@ import com.scenic.ai.entity.VisitorProfileTag;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
 import com.scenic.ai.mapper.VisitorProfileTagMapper;
-import com.scenic.ai.rag.retrieve.RagRetriever;
+import com.scenic.ai.rag.retrieve.HybridRetriever;
 import com.scenic.ai.util.SentimentAnalyzer;
 import com.scenic.ai.util.TagExtractor;
 import dev.langchain4j.service.TokenStream;
@@ -46,7 +46,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private ScenicAssistant scenicAssistant;
 
     @Autowired
-    private RagRetriever ragRetriever;
+    private HybridRetriever ragRetriever;
 
     @Autowired
     private ConversationMapper conversationMapper;

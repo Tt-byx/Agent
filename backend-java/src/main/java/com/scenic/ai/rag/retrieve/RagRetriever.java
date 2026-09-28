@@ -53,6 +53,11 @@ public class RagRetriever {
      * 任何异常都不抛出，返回空列表表示「本次无可用上下文」。
      */
     public List<RetrievedChunk> retrieve(String query) {
+        return retrieve(query, topK, minScore);
+    }
+
+    /** 可指定条数与阈值的重载 —— 供 P4 混合检索取候选池使用 */
+    public List<RetrievedChunk> retrieve(String query, int maxResults, double minScoreThreshold) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
@@ -63,8 +68,8 @@ public class RagRetriever {
             List<EmbeddingMatch<TextSegment>> matches = store.search(
                     EmbeddingSearchRequest.builder()
                             .queryEmbedding(queryEmbedding)
-                            .maxResults(topK)
-                            .minScore(minScore)
+                            .maxResults(maxResults)
+                            .minScore(minScoreThreshold)
                             .build()
             ).matches();
 
