@@ -104,6 +104,17 @@ mcp:
   server-name: scenic-mcp-server
   server-version: 1.0.0
 
+# P7 · Agent 循环（ReAct）
+agent:
+  # 最大执行步数：防止模型反复调工具陷入死循环
+  max-steps: 6
+  # 整轮任务的整体超时（秒）
+  timeout-seconds: 120
+  system-prompt: prompts/scenic-agent-system.txt
+  # 故障注入工具开关：仅用于验收「工具失败后 Agent 能自纠或优雅告知」
+  debug-tools:
+    enabled: false
+
 # WebSocket 配置
 websocket:
   max-text-message-size: 65536

@@ -1,12 +1,7 @@
 package com.scenic.ai.config;
 
-import com.scenic.ai.agent.ScenicAssistant;
-import com.scenic.ai.agent.tools.ScenicTools;
 import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
-import dev.langchain4j.service.AiServices;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -61,36 +56,12 @@ public class LangChain4jConfig {
                 .build();
     }
 
-    @Bean
-    public StreamingChatModel streamingChatModel() {
-        return OpenAiStreamingChatModel.builder()
-                .baseUrl(baseUrl)
-                .apiKey(effectiveApiKey())
-                .modelName(chatModelName)
-                .temperature(temperature)
-                .maxTokens(maxTokens)
-                .timeout(Duration.ofSeconds(timeoutSeconds))
-                .logRequests(false)
-                .logResponses(false)
-                .build();
-    }
-
-    /**
-     * 声明式 AiService。P7 之前它就是「单轮模型调用」，
-     * 后续 RAG（P3）/ 工具（P5）/ 记忆（P8）都挂在这一层之上。
-     */
-    @Bean
-    public ScenicAssistant scenicAssistant(ChatModel chatModel,
-                                           StreamingChatModel streamingChatModel,
-                                           ScenicTools scenicTools) {
-        return AiServices.builder(ScenicAssistant.class)
-                .chatModel(chatModel)
-                .streamingChatModel(streamingChatModel)
-                // P5：注册工具。LangChain4j 负责把 @Tool 生成 function schema、
-                // 执行模型选中的工具、再把结果回灌给模型做二次回答（含并行调用）。
-                .tools(scenicTools)
-                .build();
-    }
+    // P7：原先这里还有两个 Bean —— streamingChatModel 与声明式 AiService（ScenicAssistant），
+    // 二者都已随 AgentLoop 的引入而不再需要：
+    //   - AiServices 的内层工具循环**不暴露**「最大步数 / 整体超时 / 逐步可观测」这三样 P7 必需的旋钮；
+    //   - 因此 AgentLoop 直接用 ChatModel + ToolSpecifications + DefaultToolExecutor 自己组装循环，
+    //     并且**仍然复用 @Tool 注解**，工具声明不用重写一遍。
+    // 若将来要恢复逐 token 流式，把 streamingChatModel 加回来即可。
 
     /**
      * LangChain4j 会校验 apiKey 非空，为空时直接抛异常会让整个应用起不来。

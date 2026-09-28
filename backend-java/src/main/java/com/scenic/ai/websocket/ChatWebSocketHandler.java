@@ -1,7 +1,7 @@
 package com.scenic.ai.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.scenic.ai.agent.ScenicAssistant;
+import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.controller.AuthController;
 import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
@@ -9,10 +9,8 @@ import com.scenic.ai.entity.VisitorProfileTag;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
 import com.scenic.ai.mapper.VisitorProfileTagMapper;
-import com.scenic.ai.rag.retrieve.HybridRetriever;
 import com.scenic.ai.util.SentimentAnalyzer;
 import com.scenic.ai.util.TagExtractor;
-import dev.langchain4j.service.TokenStream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -43,10 +41,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private ObjectMapper objectMapper;
 
     @Autowired
-    private ScenicAssistant scenicAssistant;
-
-    @Autowired
-    private HybridRetriever ragRetriever;
+    private AgentLoop agentLoop;
 
     @Autowired
     private ConversationMapper conversationMapper;
@@ -159,44 +154,35 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 userMsg.setCreatedAt(java.time.LocalDateTime.now());
                 chatMessageMapper.insert(userMsg);
 
-                // 3. RAG 检索：知识库上下文注入系统提示词（检索失败降级为空上下文）
-                String context = ragRetriever.retrieveContext(userContent);
+                // 3. 交给 Agent 循环：自主决定是否检索、是否调工具，多步收敛
+                AgentLoop.Result result = agentLoop.run(finalSessionId, userContent);
+                String aiReply = result.answer();
+                log.info("Agent 执行完成：{} 步、{} 次工具调用、收敛={}、终止原因={}",
+                        result.stepCount(), result.toolCallCount(), result.converged(), result.stopReason());
 
-                // 4. 流式生成：JVM 内直接调模型，token 边生成边推送
-                StringBuilder buffer = new StringBuilder();
-                TokenStream stream = scenicAssistant.chatStream(context, userContent);
+                // 4. 推送最终回答
+                //    注：Agent 是多步执行，这里把最终回答整段推送（中间的工具步骤见服务端日志）。
+                //    若改回 AiServices 的 TokenStream 可以恢复逐 token 流式，
+                //    但会失去对循环步数、超时与异常自纠的控制 —— P7 选择了可控性。
+                sendToClient(session, WebSocketMessage.textChunk(aiReply));
 
-                stream.onPartialResponse(token -> {
-                            buffer.append(token);
-                            sendToClient(session, WebSocketMessage.textChunk(token));
-                        })
-                        .onCompleteResponse(response -> {
-                            String aiReply = buffer.toString();
-                            log.info("生成完成, sessionId={}, 长度={}", finalSessionId, aiReply.length());
+                // 5. AI 回复落库
+                if (!aiReply.isEmpty()) {
+                    ChatMessage aiMsg = new ChatMessage();
+                    aiMsg.setConversationId(finalConversationId);
+                    aiMsg.setRole("assistant");
+                    aiMsg.setContent(aiReply);
+                    aiMsg.setSentiment(SentimentAnalyzer.analyze(aiReply));
+                    aiMsg.setCreatedAt(java.time.LocalDateTime.now());
+                    chatMessageMapper.insert(aiMsg);
+                }
 
-                            // 4. AI 回复落库
-                            if (!aiReply.isEmpty()) {
-                                ChatMessage aiMsg = new ChatMessage();
-                                aiMsg.setConversationId(finalConversationId);
-                                aiMsg.setRole("assistant");
-                                aiMsg.setContent(aiReply);
-                                aiMsg.setSentiment(SentimentAnalyzer.analyze(aiReply));
-                                aiMsg.setCreatedAt(java.time.LocalDateTime.now());
-                                chatMessageMapper.insert(aiMsg);
-                            }
+                sendToClient(session, WebSocketMessage.done(finalSessionId, aiReply));
 
-                            sendToClient(session, WebSocketMessage.done(finalSessionId, aiReply));
-
-                            // 5. 兴趣标签提取
-                            if (userId != null) {
-                                extractAndUpdateTags(userId, userContent);
-                            }
-                        })
-                        .onError(error -> {
-                            log.error("流式生成失败, sessionId={}: {}", finalSessionId, error.getMessage(), error);
-                            trySendToClient(session, WebSocketMessage.error("AI 服务暂时不可用: " + error.getMessage()));
-                        })
-                        .start();
+                // 6. 兴趣标签提取
+                if (userId != null) {
+                    extractAndUpdateTags(userId, userContent);
+                }
 
             } catch (Exception e) {
                 log.error("[ERROR] 文字对话失败: {}", e.getMessage(), e);
