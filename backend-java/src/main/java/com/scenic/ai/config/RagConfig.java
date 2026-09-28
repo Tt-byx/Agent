@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Primary;
 
 import java.time.Duration;
 
@@ -77,6 +78,7 @@ public class RagConfig {
     }
 
     @Bean
+    @Primary
     @Lazy
     public EmbeddingStore<TextSegment> embeddingStore() {
         log.info("初始化 pgvector 向量库: {}:{}/{} (table={}, dim={})",
@@ -90,6 +92,40 @@ public class RagConfig {
                 .table(pgTable)
                 .dimension(pgDimension)
                 .createTable(pgCreateTable)
+                .build();
+    }
+
+    /** P8 · 长期记忆：游客偏好（按人存储的事实性偏好，带向量便于按相关度召回） */
+    @Bean(name = "visitorMemoryStore")
+    @Lazy
+    public EmbeddingStore<TextSegment> visitorMemoryStore() {
+        log.info("初始化长期记忆向量库: table=visitor_memory, dim={}", pgDimension);
+        return PgVectorEmbeddingStore.builder()
+                .host(pgHost)
+                .port(pgPort)
+                .database(pgDatabase)
+                .user(pgUser)
+                .password(pgPassword)
+                .table("visitor_memory")
+                .dimension(pgDimension)
+                .createTable(true)
+                .build();
+    }
+
+    /** P8 · 语义缓存：问题向量 -> 已生成答案，命中后跳过模型调用 */
+    @Bean(name = "semanticCacheStore")
+    @Lazy
+    public EmbeddingStore<TextSegment> semanticCacheStore() {
+        log.info("初始化语义缓存向量库: table=semantic_cache, dim={}", pgDimension);
+        return PgVectorEmbeddingStore.builder()
+                .host(pgHost)
+                .port(pgPort)
+                .database(pgDatabase)
+                .user(pgUser)
+                .password(pgPassword)
+                .table("semantic_cache")
+                .dimension(pgDimension)
+                .createTable(true)
                 .build();
     }
 

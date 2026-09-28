@@ -115,6 +115,32 @@ agent:
   debug-tools:
     enabled: false
 
+# P8 · 记忆体系
+memory:
+  short-term:
+    # 滑窗保留的最大**轮**数（1 轮 = 用户一条 + 助手一条）
+    max-turns: 10
+    # 累计消息数超过该值时，把最旧的溢出部分摘要化
+    summarize-threshold: 16
+  long-term:
+    # 召回用户偏好时取几条
+    top-k: 3
+    # 相似度下限（越高越严格）
+    min-score: 0.55
+
+# P8 · 语义缓存：命中后直接返回缓存答案，不再调用模型
+cache:
+  semantic:
+    enabled: true
+    # 命中阈值：语义相似度必须高于此值才复用答案
+    min-score: 0.92
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
 # WebSocket 配置
 websocket:
   max-text-message-size: 65536

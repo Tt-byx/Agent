@@ -2,6 +2,7 @@ package com.scenic.ai.agent.core;
 
 import com.scenic.ai.agent.tools.DebugTools;
 import com.scenic.ai.agent.tools.KnowledgeTools;
+import com.scenic.ai.agent.tools.MemoryTools;
 import com.scenic.ai.agent.tools.ScenicTools;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -35,8 +36,9 @@ public class AgentToolbox {
 
     public AgentToolbox(ScenicTools scenicTools,
                         KnowledgeTools knowledgeTools,
+                        MemoryTools memoryTools,
                         ObjectProvider<DebugTools> debugToolsProvider) {
-        List<Object> toolObjects = new ArrayList<>(List.of(scenicTools, knowledgeTools));
+        List<Object> toolObjects = new ArrayList<>(List.of(scenicTools, knowledgeTools, memoryTools));
         // 故障注入工具仅在 agent.debug-tools.enabled=true 时存在
         DebugTools debugTools = debugToolsProvider.getIfAvailable();
         if (debugTools != null) {

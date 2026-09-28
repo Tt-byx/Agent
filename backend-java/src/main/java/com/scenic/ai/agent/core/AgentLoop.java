@@ -1,5 +1,10 @@
 package com.scenic.ai.agent.core;
 
+import com.scenic.ai.gateway.AgentMetrics;
+import com.scenic.ai.gateway.SemanticCache;
+import com.scenic.ai.memory.LongTermMemory;
+import com.scenic.ai.memory.MemoryContextHolder;
+import com.scenic.ai.memory.ShortTermMemory;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -22,10 +27,11 @@ import java.util.List;
 /**
  * P7 · ReAct Agent 循环（reason → act → observe），由本项目**自己实现**而不是交给框架黑盒。
  *
- * 为什么不用 AiServices 自带的内层循环：
- *   1. **可控性** —— 最大步数、超时、终止条件都必须由我们决定，框架内层循环不暴露这些旋钮；
- *   2. **可观测** —— 每一步的工具选择、参数、观察结果都记录下来，既能在日志里看到，也是 P8 埋点的基础；
- *   3. **可靠性** —— 工具异常回灌、模型异常降级、达到步数上限后的强制收口，都需要在循环层处理。
+ * P8 叠加的三块能力：
+ *   1. **语义缓存**：命中直接返回，跳过整条链路（延迟秒级→毫秒级，省一次完整模型调用）；
+ *   2. **三层记忆**：短期滑窗（Redis）+ 会话摘要（Redis）+ 长期偏好（pgvector），
+ *      在每轮开始时注入系统提示词；
+ *   3. **可观测**：每次循环、每次工具调用、缓存命中、记忆写入都打点。
  *
  * 可靠性设计（P7 验收要求）：
  *   - **最大步数**：`agent.max-steps`，防止模型反复调工具陷入死循环；
@@ -53,29 +59,61 @@ public class AgentLoop {
 
     private final ChatModel chatModel;
     private final AgentToolbox toolbox;
-    private final String systemPrompt;
+    private final ShortTermMemory shortTermMemory;
+    private final LongTermMemory longTermMemory;
+    private final SemanticCache semanticCache;
+    private final AgentMetrics metrics;
+    private final String baseSystemPrompt;
     private final int maxSteps;
     private final long timeoutSeconds;
 
     public AgentLoop(ChatModel chatModel,
                      AgentToolbox toolbox,
+                     ShortTermMemory shortTermMemory,
+                     LongTermMemory longTermMemory,
+                     SemanticCache semanticCache,
+                     AgentMetrics metrics,
                      @Value("${agent.max-steps:6}") int maxSteps,
                      @Value("${agent.timeout-seconds:120}") long timeoutSeconds,
                      @Value("${agent.system-prompt:prompts/scenic-agent-system.txt}") String systemPromptPath)
             throws IOException {
         this.chatModel = chatModel;
         this.toolbox = toolbox;
+        this.shortTermMemory = shortTermMemory;
+        this.longTermMemory = longTermMemory;
+        this.semanticCache = semanticCache;
+        this.metrics = metrics;
         this.maxSteps = Math.max(maxSteps, 1);
         this.timeoutSeconds = timeoutSeconds;
-        this.systemPrompt = new ClassPathResource(systemPromptPath)
+        this.baseSystemPrompt = new ClassPathResource(systemPromptPath)
                 .getContentAsString(StandardCharsets.UTF_8);
         log.info("AgentLoop 就绪：最大步数 {}，整体超时 {}s，工具 {} 个",
                 this.maxSteps, this.timeoutSeconds, toolbox.size());
     }
 
     public Result run(String sessionId, String userMessage) {
+        return run(sessionId, sessionId, userMessage);
+    }
+
+    /**
+     * @param memoryKey 长期记忆的归属键：登录用户 = userId，匿名 = 前端持久化的 visitorId，
+     *                  退化为 sessionId（此时记忆只在本会话内有效）
+     */
+    public Result run(String sessionId, String memoryKey, String userMessage) {
+        metrics.runStarted();
+
+        // ===== P8：语义缓存命中则直接返回，跳过整条链路 =====
+        var cached = semanticCache.lookup(userMessage);
+        if (cached.isPresent()) {
+            metrics.cacheHit();
+            log.info("[CACHE] 命中，跳过 Agent 循环（question={}）", userMessage);
+            return new Result(cached.get(), List.of(), 0, true, "CACHE_HIT");
+        }
+        metrics.cacheMiss();
+
+        // ===== P8：组装带记忆的系统提示词 =====
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(systemPrompt));
+        messages.add(SystemMessage.from(buildSystemMessage(memoryKey, userMessage)));
         messages.add(UserMessage.from(userMessage));
 
         List<Step> trace = new ArrayList<>();
@@ -84,6 +122,7 @@ public class AgentLoop {
         for (int step = 1; step <= maxSteps; step++) {
             if (System.currentTimeMillis() > deadline) {
                 log.warn("Agent 整体超时（{}s），已执行 {} 步，降级返回", timeoutSeconds, step - 1);
+                metrics.runAborted();
                 return new Result(convergeAfterAbort(messages), trace, step - 1, false, "TIMEOUT");
             }
 
@@ -96,6 +135,7 @@ public class AgentLoop {
                 aiMessage = response.aiMessage();
             } catch (Exception e) {
                 log.error("Agent 第 {} 步模型调用失败: {}", step, e.getMessage(), e);
+                metrics.runAborted();
                 return new Result(MODEL_ERROR_ANSWER, trace, step - 1, false, "MODEL_ERROR");
             }
             messages.add(aiMessage);
@@ -106,21 +146,128 @@ public class AgentLoop {
                 if (answer == null || answer.isBlank()) {
                     answer = FALLBACK_ANSWER;
                 }
+                metrics.runConverged();
+                rememberTurn(sessionId, userMessage, answer);
+                semanticCache.store(userMessage, answer);
                 log.info("Agent 收敛：共 {} 步、{} 次工具调用", step, trace.size());
                 return new Result(answer, trace, step, true, "CONVERGED");
             }
 
-            // act → observe
-            for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
-                String observation = toolbox.execute(request, sessionId);
-                boolean failed = observation.contains("执行失败：");
-                trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
-                messages.add(ToolExecutionResultMessage.from(request, observation));
+            // act → observe（工具执行期间暴露 memoryKey，供记忆类工具写入）
+            MemoryContextHolder.set(memoryKey);
+            try {
+                for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
+                    metrics.toolCalled();
+                    String observation = toolbox.execute(request, sessionId);
+                    boolean failed = observation.contains("执行失败：");
+                    if (failed) {
+                        metrics.toolFailed();
+                    }
+                    trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
+                    messages.add(ToolExecutionResultMessage.from(request, observation));
+                }
+            } finally {
+                MemoryContextHolder.clear();
             }
         }
 
         log.warn("Agent 达到最大步数 {}，触发强制收口", maxSteps);
+        metrics.runAborted();
         return new Result(convergeAfterAbort(messages), trace, maxSteps, false, "MAX_STEPS");
+    }
+
+    /**
+     * 组装带记忆的系统提示词：
+     * 基础人设与规则 + 长期偏好（跨会话）+ 短期摘要与本轮上下文（会话内）。
+     */
+    private String buildSystemMessage(String memoryKey, String query) {
+        StringBuilder sb = new StringBuilder(baseSystemPrompt);
+
+        // 长期偏好（跨会话）
+        List<String> preferences = longTermMemory.recall(memoryKey, query);
+        metrics.memoryRecalled(preferences.size());
+        if (!preferences.isEmpty()) {
+            sb.append("\n\n【关于这位游客的长期偏好（来自历史对话，可主动利用）】\n");
+            for (int i = 0; i < preferences.size(); i++) {
+                sb.append(i + 1).append(". ").append(preferences.get(i)).append('\n');
+            }
+        }
+
+        // 会话摘要 + 短期滑窗（会话内）
+        String summary = shortTermMemory.summary(memoryKey);
+        List<ShortTermMemory.Turn> recent = shortTermMemory.recent(memoryKey);
+        if (summary != null && !summary.isBlank()) {
+            sb.append("\n\n【本会话此前内容的摘要】\n").append(summary).append('\n');
+        }
+        if (!recent.isEmpty()) {
+            sb.append("\n\n【本会话最近几轮对话】\n");
+            for (ShortTermMemory.Turn turn : recent) {
+                sb.append(turn.role().equals("user") ? "游客: " : "导游: ")
+                        .append(abbreviate(turn.content(), 200)).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 记录本轮对话，并在超出滑窗时把溢出部分摘要化 */
+    private void rememberTurn(String sessionId, String question, String answer) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        shortTermMemory.append(sessionId, "user", question);
+        shortTermMemory.append(sessionId, "assistant", answer);
+
+        long size = shortTermMemory.size(sessionId);
+        if (size > shortTermWindowSize()) {
+            List<ShortTermMemory.Turn> drained = shortTermMemory.drain(sessionId, size - shortTermWindowSize());
+            summarize(sessionId, drained);
+        }
+    }
+
+    private long shortTermWindowSize() {
+        // 滑窗按「消息条数」管理（1 轮 = 2 条）
+        return 20;
+    }
+
+    /** 把溢出的旧对话摘要化（best-effort，失败不影响主流程） */
+    private void summarize(String sessionId, List<ShortTermMemory.Turn> drained) {
+        if (drained == null || drained.isEmpty()) {
+            return;
+        }
+        try {
+            StringBuilder transcript = new StringBuilder();
+            String previous = shortTermMemory.summary(sessionId);
+            if (previous != null && !previous.isBlank()) {
+                transcript.append("已有摘要：").append(previous).append("\n\n新增对话：\n");
+            }
+            for (ShortTermMemory.Turn turn : drained) {
+                transcript.append(turn.role().equals("user") ? "游客: " : "导游: ")
+                        .append(abbreviate(turn.content(), 300)).append('\n');
+            }
+
+            AiMessage result = chatModel.chat(ChatRequest.builder()
+                    .messages(
+                            SystemMessage.from("你是会议纪要助手。请把下面的对话压缩成不超过 150 字的要点摘要，"
+                                    + "保留游客的兴趣偏好、已得到的结论和未解决的问题。只输出摘要本身。"),
+                            UserMessage.from(transcript.toString())
+                    ).build()).aiMessage();
+
+            String summary = result.text();
+            if (summary != null && !summary.isBlank()) {
+                shortTermMemory.setSummary(sessionId, summary.strip());
+                log.info("[MEMORY] 会话摘要已更新（{} 条旧消息被摘要化）", drained.size());
+            }
+        } catch (Exception e) {
+            log.warn("会话摘要生成失败（不影响主流程）: {}", e.getMessage());
+        }
+    }
+
+    private String abbreviate(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String flat = text.replace("\r", "").replace("\n", " ").strip();
+        return flat.length() <= max ? flat : flat.substring(0, max) + "...";
     }
 
     /** 去掉工具再问一次，让模型基于已拿到的信息收口 */
