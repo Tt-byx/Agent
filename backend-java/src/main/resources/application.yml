@@ -97,6 +97,13 @@ rerank:
   model-name: ${SCENIC_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
   timeout-seconds: 30
 
+# MCP Server（P6）：把景区工具以标准 MCP 协议暴露给外部客户端
+# 外部客户端（Cherry Studio / Claude Desktop）填 http://<host>:10086/mcp
+mcp:
+  endpoint: /mcp
+  server-name: scenic-mcp-server
+  server-version: 1.0.0
+
 # WebSocket 配置
 websocket:
   max-text-message-size: 65536
