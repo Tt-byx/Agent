@@ -2,9 +2,9 @@
  * WebSocket 管理模块
  * 负责与 Java 后端的 WebSocket 连接、消息收发
  *
- * 消息协议：
- *   发送: {type: "text", content, session_id} | {type: "audio", format, session_id} + binary
- *   接收: {type: "text_chunk"|"audio_chunk"|"asr_result"|"done"|"error", ...}
+ * 消息协议（纯文本 · Agent 改造后）：
+ *   发送: {type: "text", content, session_id}
+ *   接收: {type: "text_chunk"|"done"|"error", ...}
  */
 const WS_BASE = import.meta.env.VITE_WS_URL || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/chat`
 
@@ -19,13 +19,10 @@ export class ChatWebSocket {
 
     // 事件回调
     this.onTextChunk = null
-    this.onAudioChunk = null
-    this.onAsrResult = null
     this.onDone = null
     this.onError = null
     this.onConnect = null
     this.onDisconnect = null
-    this.onExpression = null
   }
 
   /**
@@ -54,20 +51,11 @@ export class ChatWebSocket {
           case 'text_chunk':
             this.onTextChunk?.(data.content)
             break
-          case 'audio_chunk':
-            this.onAudioChunk?.(data.audio, data.format)
-            break
-          case 'asr_result':
-            this.onAsrResult?.(data.text)
-            break
           case 'done':
             this.onDone?.(data)
             break
           case 'error':
             this.onError?.(data.message)
-            break
-          case 'expression':
-            this.onExpression?.(data.expression)
             break
           default:
             console.warn('[WS] 未知消息类型:', data.type)
@@ -100,30 +88,6 @@ export class ChatWebSocket {
       content: text,
       session_id: sessionId,
     }))
-    return true
-  }
-
-  /**
-   * 发送音频数据
-   * @param {Blob} audioBlob - 音频 Blob
-   * @param {string} format - 音频格式 (webm/wav/mp3)
-   * @param {string} sessionId - 会话ID
-   */
-  sendAudio(audioBlob, format = 'webm', sessionId = null) {
-    if (!this._checkConnection()) return false
-
-    // 先发送元数据 JSON
-    this.ws.send(JSON.stringify({
-      type: 'audio',
-      format: format,
-      session_id: sessionId,
-    }))
-
-    // 再发送二进制音频数据
-    audioBlob.arrayBuffer().then((buffer) => {
-      this.ws.send(buffer)
-    })
-
     return true
   }
 

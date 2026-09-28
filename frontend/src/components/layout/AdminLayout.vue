@@ -14,7 +14,6 @@ const menuItems = [
   { path: '/admin/conversations', icon: 'ChatDotRound', label: '对话记录' },
   { path: '/admin/ai-assistant', icon: 'ChatLineSquare', label: 'AI助手' },
   { path: '/admin/marketing-report', icon: 'DataAnalysis', label: '营销报告' },
-  { path: '/admin/digital-human', icon: 'Avatar', label: '数字人配置' },
   { path: '/admin/system', icon: 'Setting', label: '系统管理' },
 ]
 </script>

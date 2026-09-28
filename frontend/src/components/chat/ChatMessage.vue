@@ -1,7 +1,6 @@
 ﻿<script setup>
-import { ref, inject, computed } from 'vue'
+import { ref } from 'vue'
 import { submitFeedback } from '@/api/analytics'
-import { useTtsStore } from '@/stores/tts'
 import { ElMessage } from 'element-plus'
 
 const props = defineProps({
@@ -10,25 +9,6 @@ const props = defineProps({
     required: true,
   },
 })
-
-// Pinia store：全局单例，确保同一时间只有一条 TTS 在播放
-const ttsStore = useTtsStore()
-
-// 从 ChatView 注入的当前音色
-const currentVoice = inject('currentVoice', ref(''))
-
-// 消息唯一标识：内容前 80 字 + 时间戳
-const msgKey = computed(() =>
-  `${(props.message.content || '').slice(0, 80)}_${props.message.timestamp || ''}`
-)
-
-// 是否正在播放（响应式）
-const playing = computed(() => ttsStore.isPlaying(msgKey.value))
-
-// 播放/重新播放
-async function playTTS() {
-  await ttsStore.play(props.message.content, currentVoice.value, msgKey.value)
-}
 
 const feedbackGiven = ref(null)
 
@@ -68,17 +48,7 @@ function formatTime(timestamp) {
     </div>
     <div class="content-wrapper">
       <div class="bubble" :class="message.role">
-        <!-- 语音消息标识 -->
-        <span v-if="message.isVoice" class="voice-tag">🎤</span>
         <span class="text">{{ message.content }}</span>
-        <!-- TTS 语音播放按钮 -->
-        <button
-          v-if="message.role === 'assistant' && !message.isError && message.content"
-          class="tts-play-btn"
-          :class="{ playing: playing }"
-          @click.stop="playTTS"
-          :title="playing ? '重新播放' : '播放语音'"
-        >{{ playing ? '🔊' : '🔈' }}</button>
       </div>
       <div class="time">{{ formatTime(message.timestamp) }}</div>
       <!-- 反馈按钮：仅 AI 消息显示 -->
@@ -154,10 +124,6 @@ function formatTime(timestamp) {
   border-top-left-radius: 4px;
 }
 
-.voice-tag {
-  margin-right: 4px;
-}
-
 .time {
   font-size: 12px;
   color: #909399;
@@ -191,38 +157,5 @@ function formatTime(timestamp) {
   background: #e8f0eb;
   border-color: #5a8a6a;
   transform: scale(1.15);
-}
-
-/* TTS 播放按钮 */
-.tts-play-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  margin-left: 8px;
-  background: none;
-  border: 1px solid #dcdfe6;
-  border-radius: 14px;
-  cursor: pointer;
-  font-size: 13px;
-  opacity: 0;
-  transition: all 0.2s;
-  vertical-align: middle;
-  flex-shrink: 0;
-}
-.chat-message:hover .tts-play-btn {
-  opacity: 0.7;
-}
-.tts-play-btn:hover {
-  opacity: 1 !important;
-  background: #ecf5ff;
-  border-color: #409eff;
-}
-.tts-play-btn.playing {
-  opacity: 1;
-  background: #409eff;
-  color: #fff;
-  border-color: #409eff;
 }
 </style>

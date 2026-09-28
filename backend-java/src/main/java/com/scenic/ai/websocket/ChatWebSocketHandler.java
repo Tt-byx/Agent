@@ -13,28 +13,26 @@ import com.scenic.ai.util.TagExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * 纯文本对话 WebSocket 处理器（Agent 改造后）。
+ * 数字人与语音链路已于 2026-09-28 移除，仅保留文字流式对话。
+ */
 @Component
 @Slf4j
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
-    private final Map<String, byte[]> pendingAudio = new ConcurrentHashMap<>();
-    private final Map<String, String> pendingAudioSessionId = new ConcurrentHashMap<>();
-    private final Map<String, String> pendingAudioFormat = new ConcurrentHashMap<>();
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -51,8 +49,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Value("${python.backend.url:http://localhost:8000}")
     private String pythonBackendUrl;
 
-    @Autowired
-    private RestTemplate restTemplate;
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
     @Override
@@ -84,20 +80,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         try {
             WebSocketMessage msg = objectMapper.readValue(payload, WebSocketMessage.class);
 
-            switch (msg.getType()) {
-                case "text":
-                    handleTextChat(session, msg);
-                    break;
-                case "audio":
-                    // 音频元数据，保存 session_id 和 format，等待二进制帧
-                    pendingAudio.put(session.getId(), new byte[0]);
-                    pendingAudioSessionId.put(session.getId(), msg.getSessionId());
-                    pendingAudioFormat.put(session.getId(), msg.getFormat() != null ? msg.getFormat() : "webm");
-                    log.info("收到音频元数据，等待音频二进制帧: session={}", session.getId());
-                    break;
-                default:
-                    log.warn("未知消息类型: {}", msg.getType());
-                    sendToClient(session, WebSocketMessage.error("未知消息类型: " + msg.getType()));
+            if ("text".equals(msg.getType())) {
+                handleTextChat(session, msg);
+            } else {
+                log.warn("未知消息类型: {}", msg.getType());
+                sendToClient(session, WebSocketMessage.error("未知消息类型: " + msg.getType()));
             }
         } catch (Exception e) {
             log.error("解析消息失败: {}", e.getMessage(), e);
@@ -106,23 +93,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
-        ByteBuffer buffer = message.getPayload();
-        byte[] audioData = new byte[buffer.remaining()];
-        buffer.get(audioData);
-
-        log.info("收到音频二进制帧: {} bytes, session={}", audioData.length, session.getId());
-
-        // 异步转发到 Python 后端
-        CompletableFuture.runAsync(() -> proxyAudioToPython(session, audioData), executor);
-    }
-
-    @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         sessions.remove(session.getId());
-        pendingAudio.remove(session.getId());
-        pendingAudioSessionId.remove(session.getId());
-        pendingAudioFormat.remove(session.getId());
         log.info("WebSocket 连接关闭: {}", session.getId());
     }
 
@@ -130,9 +102,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
      * 流式读取 SSE 响应，逐行解析并转发给前端
      * @return done 事件中的 total_text（AI 完整回复），用于保存数据库
      */
-    private String streamPythonSSE(WebSocketSession session, String endpoint,
-                                    Map<String, String> formFields, String fileFieldName,
-                                    byte[] fileData, String fileFilename) {
+    private String streamPythonSSE(WebSocketSession session, String endpoint, Map<String, String> formFields) {
         String totalText = "";
         java.net.HttpURLConnection conn = null;
         String boundary = "----WebKitFormBoundary" + System.currentTimeMillis();
@@ -146,11 +116,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
             conn.setChunkedStreamingMode(8192);
 
-            // 构建 multipart body
+            // 构建 multipart body（仅表单字段）
             try (var os = conn.getOutputStream();
                  var writer = new java.io.OutputStreamWriter(os, java.nio.charset.StandardCharsets.UTF_8)) {
-
-                // 写入普通表单字段
                 for (Map.Entry<String, String> entry : formFields.entrySet()) {
                     if (entry.getValue() == null) continue;
                     writer.write("--" + boundary + "\r\n");
@@ -158,30 +126,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     writer.write(entry.getValue() + "\r\n");
                     writer.flush();
                 }
-
-                // 写入文件字段
-                if (fileData != null && fileData.length > 0 && fileFieldName != null) {
-                    writer.write("--" + boundary + "\r\n");
-                    writer.write("Content-Disposition: form-data; name=\"" + fileFieldName
-                            + "\"; filename=\"" + (fileFilename != null ? fileFilename : "audio.webm") + "\"\r\n");
-                    writer.write("Content-Type: application/octet-stream\r\n\r\n");
-                    writer.flush();
-                    os.write(fileData);
-                    os.write("\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                    writer.flush();
-                }
-
                 writer.write("--" + boundary + "--\r\n");
                 writer.flush();
             }
 
             // 检查响应状态码
             int responseCode = conn.getResponseCode();
-            java.io.InputStream responseStream;
             if (responseCode >= 400) {
-                responseStream = conn.getErrorStream();
-                if (responseStream != null) {
-                    String errorBody = new String(responseStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                java.io.InputStream errorStream = conn.getErrorStream();
+                if (errorStream != null) {
+                    String errorBody = new String(errorStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
                     log.error("Python 返回错误 {}: {}", responseCode, errorBody);
                     trySendToClient(session, WebSocketMessage.error("AI 服务错误: " + responseCode));
                 }
@@ -206,17 +160,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                                     Map<String, Object> textData = objectMapper.readValue(data, Map.class);
                                     sendToClient(session, WebSocketMessage.textChunk((String) textData.get("text")));
                                     break;
-                                case "audio_chunk":
-                                    Map<String, Object> audioData = objectMapper.readValue(data, Map.class);
-                                    sendToClient(session, WebSocketMessage.audioChunk(
-                                            (String) audioData.get("audio"),
-                                            (String) audioData.get("format")
-                                    ));
-                                    break;
-                                case "asr_result":
-                                    Map<String, Object> asrData = objectMapper.readValue(data, Map.class);
-                                    sendToClient(session, WebSocketMessage.asrResult((String) asrData.get("text")));
-                                    break;
                                 case "done":
                                     Map<String, Object> doneData = objectMapper.readValue(data, Map.class);
                                     totalText = (String) doneData.getOrDefault("total_text", "");
@@ -229,9 +172,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                                     Map<String, Object> errData = objectMapper.readValue(data, Map.class);
                                     sendToClient(session, WebSocketMessage.error((String) errData.get("message")));
                                     break;
-                                case "expression":
-                                    Map<String, Object> exprData = objectMapper.readValue(data, Map.class);
-                                    sendToClient(session, WebSocketMessage.expression((String) exprData.get("expression")));
+                                default:
                                     break;
                             }
                         } catch (Exception e) {
@@ -304,7 +245,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 formFields.put("session_id", sessionId != null ? sessionId : "");
 
                 // 流式读取 SSE，边收边转发给前端，返回 AI 完整回复
-                String aiReply = streamPythonSSE(session, "/api/chat/stream", formFields, null, null, null);
+                String aiReply = streamPythonSSE(session, "/api/chat/stream", formFields);
 
                 // 3. 保存 AI 回复到数据库
                 if (aiReply != null && !aiReply.isEmpty()) {
@@ -335,29 +276,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             trySendToClient(session, WebSocketMessage.error("异步处理错误"));
             return null;
         });
-    }
-
-    /**
-     * 处理音频对话：流式调 Python /api/chat/stream
-     */
-    private void proxyAudioToPython(WebSocketSession session, byte[] audioData) {
-        try {
-            String sessionId = pendingAudioSessionId.remove(session.getId());
-            String rawFormat = pendingAudioFormat.remove(session.getId());
-            final String audioFormat = rawFormat != null ? rawFormat : "webm";
-
-            Map<String, String> formFields = new java.util.LinkedHashMap<>();
-            if (sessionId != null) {
-                formFields.put("session_id", sessionId);
-            }
-
-            // 流式读取 SSE，边收边转发
-            streamPythonSSE(session, "/api/chat/stream", formFields, "audio", audioData, "audio." + audioFormat);
-
-        } catch (Exception e) {
-            log.error("转发音频到 Python 失败: {}", e.getMessage(), e);
-            trySendToClient(session, WebSocketMessage.error("语音处理失败"));
-        }
     }
 
     /**
@@ -425,10 +343,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
      */
     private String generateTitle(String content) {
         if (content == null || content.isEmpty()) return "新对话";
-        // 去除空白和标点
         String clean = content.replaceAll("[\\s\\n\\r]+", "").trim();
         if (clean.length() <= 16) return clean;
-        // 截取前16字 + 省略号
         return clean.substring(0, 16) + "...";
     }
 }

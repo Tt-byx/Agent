@@ -22,12 +22,6 @@ const routes = [
         component: () => import('@/views/visitor/ChatView.vue'),
         meta: { requiresAuth: true },
       },
-      {
-        path: 'call',
-        name: 'VoiceCall',
-        component: () => import('@/views/visitor/VoiceCallView.vue'),
-        meta: { requiresAuth: true },
-      },
     ],
   },
   // ========== 管理后台 ==========
@@ -61,11 +55,6 @@ const routes = [
         path: 'visitor-profiles',
         name: 'AdminVisitorProfiles',
         component: () => import('@/views/admin/VisitorProfilesView.vue'),
-      },
-      {
-        path: 'digital-human',
-        name: 'AdminDigitalHuman',
-        component: () => import('@/views/admin/DigitalHumanView.vue'),
       },
       {
         path: 'system',

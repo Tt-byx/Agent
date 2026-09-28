@@ -76,18 +76,6 @@ onMounted(checkHealth)
           <span class="info-value">ChromaDB（本地持久化）</span>
         </div>
         <div class="info-item">
-          <span class="info-label">语音合成</span>
-          <span class="info-value">edge-tts（Microsoft Edge 引擎）</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">语音识别</span>
-          <span class="info-value">MiMo mimo-v2.5-asr API</span>
-        </div>
-        <div class="info-item">
-          <span class="info-label">数字人引擎</span>
-          <span class="info-value">Live2D Cubism SDK v5</span>
-        </div>
-        <div class="info-item">
           <span class="info-label">Embedding</span>
           <span class="info-value">SiliconFlow BAAI/bge-m3</span>
         </div>

@@ -30,14 +30,14 @@ watch(
   <div ref="listRef" class="message-list">
     <div v-if="messages.length === 0" class="empty-state">
       <el-icon :size="48" color="#c0c4cc"><ChatDotRound /></el-icon>
-      <p>向数字人提问吧</p>
+      <p>向智能导游提问吧</p>
     </div>
     <template v-else>
       <slot />
     </template>
     <div v-if="loading" class="loading-indicator">
       <el-icon class="is-loading"><Loading /></el-icon>
-      <span>数字人正在思考...</span>
+      <span>AI 正在思考...</span>
     </div>
   </div>
 </template>

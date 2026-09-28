@@ -1,44 +1,15 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, provide } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useUserStore } from '@/stores/user'
 import { getConversations, getConversationMessages, deleteConversation, renameConversation, searchConversations } from '@/api/auth'
-import { getVoices, setVoice } from '@/api/voice'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
-import Live2DCanvas from '@/components/live2d/Live2DCanvas.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const chatStore = useChatStore()
 const userStore = useUserStore()
-const live2dRef = ref(null)
-const isLive2DReady = ref(false)
-
-// 音色选择
-const voiceOptions = ref([])
-const currentVoice = ref('zh-CN-XiaoxiaoNeural')
-provide('currentVoice', currentVoice)
-
-async function loadVoices() {
-  try {
-    const data = await getVoices()
-    if (data?.voices) {
-      voiceOptions.value = data.voices
-      if (data.current) currentVoice.value = data.current
-    }
-  } catch { /* ignore */ }
-}
-
-async function handleVoiceChange(voiceId) {
-  currentVoice.value = voiceId
-  try {
-    await setVoice(voiceId)
-    ElMessage.success('音色已切换')
-  } catch {
-    ElMessage.warning('音色切换失败')
-  }
-}
 
 const conversations = ref([])
 const activeConvId = ref(null)
@@ -192,75 +163,6 @@ watch(() => chatStore.loading, async (loading, oldLoading) => {
   }
 })
 
-// ── 数字人口型同步 ──
-// 文字口型同步：收到新文本+时长时启动 viseme 驱动
-watch([() => chatStore.lipSyncText, () => chatStore.lipSyncDuration], ([text, duration]) => {
-  if (text && live2dRef.value && duration > 0) {
-    live2dRef.value.startTextLipSync(text, duration)
-  }
-})
-
-// 口型同步 + 表情重置 由 loading/audioPlaying 联合控制（见下方 watch）
-// 音频播放结束时停止口型同步 — 已合并到 loading watcher 中
-
-let _expressionResetTimer = null
-
-// loading 状态变化：控制口型同步 + 表情重置
-// 改进：等待音频播放完毕后再重置表情，避免覆盖正在播放的TTS中的表情
-watch(() => chatStore.loading, (loading) => {
-  if (loading) {
-    if (_expressionResetTimer) { clearTimeout(_expressionResetTimer); _expressionResetTimer = null }
-    live2dRef.value?.setExpression('Normal')
-    chatStore.currentExpression = 'Normal'
-  } else {
-    live2dRef.value?.stopTextLipSync()
-    live2dRef.value?.setLipSync(0)
-    // 不再立即设置重置定时器，等音频播完后再由 audioPlaying watcher 处理
-    // 如果没有音频（错误情况等），用4秒兜底重置
-    if (!chatStore.audioPlaying) {
-      _scheduleExpressionReset()
-    }
-  }
-})
-
-function _scheduleExpressionReset() {
-  if (_expressionResetTimer) clearTimeout(_expressionResetTimer)
-  _expressionResetTimer = setTimeout(() => {
-    _expressionResetTimer = null
-    live2dRef.value?.setExpression('Normal')
-    chatStore.currentExpression = 'Normal'
-  }, 4000)
-}
-
-// 音频播放结束时：停止口型同步 + 安排表情重置
-watch(() => chatStore.audioPlaying, (playing) => {
-  if (!playing) {
-    live2dRef.value?.stopTextLipSync()
-    // 音频播完后，延迟重置表情
-    if (!chatStore.loading) {
-      _scheduleExpressionReset()
-    }
-  }
-})
-
-// ── 数字人表情驱动 ──
-function applyExpression(expr) {
-  if (expr && live2dRef.value) {
-    live2dRef.value.setExpression(expr)
-  }
-}
-
-watch(() => chatStore.currentExpression, (expr) => {
-  if (expr && live2dRef.value) {
-    live2dRef.value.setExpression(expr)
-  }
-})
-
-function onLive2DReady() {
-  isLive2DReady.value = true
-  chatStore.setExpressionCallback(applyExpression)
-}
-
 function formatTime(time) {
   if (!time) return ''
   const d = new Date(time)
@@ -274,7 +176,6 @@ onMounted(async () => {
   chatStore.initWebSocket()
   await userStore.fetchMe()
   await loadLastConversation()
-  loadVoices()
 })
 
 onUnmounted(() => {
@@ -285,31 +186,9 @@ onUnmounted(() => {
 <template>
   <div class="chat-view">
     <div class="chat-layout">
-      <div class="avatar-panel">
-        <Live2DCanvas ref="live2dRef" class="live2d-wrapper" @ready="onLive2DReady" />
-      </div>
-
       <div class="chat-panel">
         <div v-if="!chatStore.isWsConnected" class="connection-hint">
           <span class="dot"></span> 聊天服务未连接
-        </div>
-
-        <div class="chat-toolbar">
-          <span class="toolbar-label">🎙️ 音色</span>
-          <el-select
-            :model-value="currentVoice"
-            @change="handleVoiceChange"
-            size="small"
-            style="width: 160px"
-            :teleported="false"
-          >
-            <el-option
-              v-for="v in voiceOptions"
-              :key="v.id"
-              :label="`${v.name}（${v.gender}）`"
-              :value="v.id"
-            />
-          </el-select>
         </div>
 
         <div class="chat-container">
@@ -424,14 +303,10 @@ onUnmounted(() => {
 <style scoped>
 .chat-view { width: 100%; height: calc(100vh - 60px); padding: 12px; display: flex; flex-direction: column; }
 .chat-layout { flex: 1; display: flex; gap: 12px; min-height: 0; }
-.avatar-panel { width: 360px; min-width: 280px; display: flex; flex-direction: column; background: linear-gradient(180deg, #e8f4f8 0%, #d4e9d7 40%, #f0ebe3 100%); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
-.live2d-wrapper { flex: 1; min-height: 0; }
 .chat-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .connection-hint { display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: #fdf6ec; border-radius: 6px; color: #e6a23c; font-size: 12px; flex-shrink: 0; }
 .connection-hint .dot { width: 6px; height: 6px; border-radius: 50%; background: #e6a23c; animation: blink 1.5s ease-in-out infinite; }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.chat-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); flex-shrink: 0; }
-.toolbar-label { font-size: 13px; color: #606266; white-space: nowrap; }
 .chat-container { flex: 1; display: flex; flex-direction: column; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); overflow: hidden; min-height: 0; }
 .interest-tags { padding: 20px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
 .tags-title { font-size: 14px; color: #606266; margin-bottom: 12px; }
@@ -462,5 +337,4 @@ onUnmounted(() => {
 .conv-snippet { font-size: 11px; color: #999; margin-top: 3px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .conv-snippet :deep(mark), .conv-title :deep(mark) { background: #fef08a; color: #333; padding: 0 1px; border-radius: 2px; }
 @media (max-width: 1100px) { .history-panel { display: none; } }
-@media (max-width: 900px) { .chat-layout { flex-direction: column; } .avatar-panel { width: 100%; height: 300px; min-width: unset; } }
 </style>

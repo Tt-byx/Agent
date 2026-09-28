@@ -8,7 +8,7 @@ const router = useRouter()
   <div class="home-view">
     <div class="hero">
       <h1>欢迎来到景区AI导游</h1>
-      <p>智能数字人为您提供专业的景区导览服务</p>
+      <p>AI 智能导游为您提供专业的景区导览服务</p>
       <el-button type="primary" size="large" @click="router.push('/chat')">
         <el-icon><ChatDotRound /></el-icon>
         开始对话

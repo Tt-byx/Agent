@@ -66,13 +66,13 @@ function toggleMode() {
             </svg>
           </div>
           <h1 class="brand-title">景区 AI 导览</h1>
-          <p class="brand-sub">数字人智能导游系统</p>
+          <p class="brand-sub">景区智能导览 Agent</p>
         </div>
 
         <div class="visual-features">
           <div class="feature">
-            <span class="feature-icon">🗣️</span>
-            <span>语音对话 · 自然交互</span>
+            <span class="feature-icon">📚</span>
+            <span>知识库问答 · 有据可依</span>
           </div>
           <div class="feature">
             <span class="feature-icon">🗺️</span>
@@ -80,12 +80,12 @@ function toggleMode() {
           </div>
           <div class="feature">
             <span class="feature-icon">🤖</span>
-            <span>数字人 · 实时口型同步</span>
+            <span>工具调用 · 多步推理</span>
           </div>
         </div>
 
         <div class="visual-deco">
-          <span>山水之间 · 智能导览 · 数字人伴你同行</span>
+          <span>山水之间 · 智能导览 · 有问必答</span>
         </div>
       </div>
     </div>
@@ -95,7 +95,7 @@ function toggleMode() {
       <div class="form-wrapper">
         <div class="form-header">
           <h2 class="form-title">{{ isLogin ? '欢迎回来' : '创建账号' }}</h2>
-          <p class="form-subtitle">{{ isLogin ? '登录后开始智能导览体验' : '注册即可与数字人对话' }}</p>
+          <p class="form-subtitle">{{ isLogin ? '登录后开始智能导览体验' : '注册即可与智能导游对话' }}</p>
         </div>
 
         <!-- Tab 切换 -->

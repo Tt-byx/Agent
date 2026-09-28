@@ -444,7 +444,7 @@ onUnmounted(() => {
       <div v-else class="empty">
         <el-empty description="暂无文档">
           <template #description>
-            <span class="empty-desc">上传景区资料，让数字人拥有专业知识</span>
+            <span class="empty-desc">上传景区资料，让智能导游拥有专业知识</span>
           </template>
         </el-empty>
       </div>

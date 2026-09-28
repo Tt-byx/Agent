@@ -7,7 +7,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
-      '@framework': path.resolve(__dirname, 'src/live2d/cubism-framework'),
     },
   },
   server: {
