@@ -96,6 +96,18 @@
             <artifactId>langchain4j-open-ai</artifactId>
         </dependency>
 
+        <!-- LangChain4j PGVector 向量库（P3 RAG 检索） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-pgvector</artifactId>
+        </dependency>
+
+        <!-- PostgreSQL JDBC 驱动 -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+
         <!-- 测试 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

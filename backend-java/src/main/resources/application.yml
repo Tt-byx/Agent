@@ -9,7 +9,12 @@
 spring:
   # 本地私有配置（密钥等），不进版本库；文件不存在也不影响启动
   config:
-    import: optional:classpath:application-local.yml
+    import:
+      - optional:classpath:application-local.yml
+      # 项目根目录的 .env（已被 gitignore）。两个相对路径都试，
+      # 兼容 `mvn spring-boot:run`（cwd=backend-java）与 `java -jar`（cwd=backend-java）
+      - optional:file:./.env[.properties]
+      - optional:file:../.env[.properties]
   datasource:
     url: jdbc:mysql://localhost:3306/scenic_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
@@ -37,16 +42,49 @@ python:
   backend:
     url: http://localhost:9000
 
-# 大模型配置（OpenAI 兼容：MiMo / DeepSeek / 百炼 均可直接替换 base-url 与 model）
-# 注意：密钥不要写在本文件（仓库公开）。放 src/main/resources/application-local.yml 或设环境变量。
+# 大模型配置（OpenAI 兼容：DeepSeek / MiMo / 百炼 均可直接替换 base-url 与 model）
+# 注意：密钥不要写在本文件（仓库公开）。放项目根目录 .env 或设环境变量。
 llm:
-  base-url: ${SCENIC_LLM_BASE_URL:https://api.xiaomimimo.com/v1}
+  base-url: ${SCENIC_LLM_BASE_URL:https://api.deepseek.com/v1}
   api-key: ${SCENIC_LLM_API_KEY:}
-  chat-model: ${SCENIC_LLM_MODEL:mimo-v2.5-pro}
+  chat-model: ${SCENIC_LLM_MODEL:deepseek-flash}
   temperature: 0.7
-  max-tokens: 1024
-  timeout-seconds: 60
+  # deepseek-flash 会先输出推理 token（实测一次问答中推理占 85%）。
+  # max-tokens 给小了会导致推理吃光额度、正式回答为空，故必须给足。
+  max-tokens: 4096
+  timeout-seconds: 120
   max-retries: 2
+
+# Embedding（OpenAI 兼容，当前接硅基流动 bge-m3，输出维度 1024）
+embedding:
+  base-url: ${SCENIC_EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
+  api-key: ${SCENIC_EMBEDDING_API_KEY:}
+  model-name: ${SCENIC_EMBEDDING_MODEL:BAAI/bge-m3}
+  dimension: 1024
+  timeout-seconds: 30
+  max-retries: 2
+
+# 向量库：PostgreSQL + pgvector（P3 起用于知识库检索）
+pgvector:
+  host: ${SCENIC_PG_HOST:localhost}
+  port: ${SCENIC_PG_PORT:5432}
+  database: ${SCENIC_PG_DATABASE:scenic_vectors}
+  user: ${SCENIC_PG_USER:postgres}
+  password: ${SCENIC_PG_PASSWORD:postgres}
+  table: scenic_embeddings
+  dimension: 1024
+  create-table: true
+
+# RAG 检索参数（数值对齐 Python 侧实现）
+rag:
+  top-k: 5
+  chunk-size: 400
+  chunk-overlap: 50
+  max-context-chars: 1500
+  # 阈值语义与 Python 侧相反：ChromaDB 用 cosine distance（0.7 为上限，越小越相关），
+  # LangChain4j 返回 similarity score（越大越相关），所以这里是下限。
+  min-score: 0.3
+  max-chunks-per-doc: 2000
 
 # WebSocket 配置
 websocket:

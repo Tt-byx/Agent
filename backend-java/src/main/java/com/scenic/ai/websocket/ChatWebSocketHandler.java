@@ -9,6 +9,7 @@ import com.scenic.ai.entity.VisitorProfileTag;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
 import com.scenic.ai.mapper.VisitorProfileTagMapper;
+import com.scenic.ai.rag.retrieve.RagRetriever;
 import com.scenic.ai.util.SentimentAnalyzer;
 import com.scenic.ai.util.TagExtractor;
 import dev.langchain4j.service.TokenStream;
@@ -43,6 +44,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     @Autowired
     private ScenicAssistant scenicAssistant;
+
+    @Autowired
+    private RagRetriever ragRetriever;
 
     @Autowired
     private ConversationMapper conversationMapper;
@@ -155,9 +159,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                 userMsg.setCreatedAt(java.time.LocalDateTime.now());
                 chatMessageMapper.insert(userMsg);
 
-                // 3. 流式生成：JVM 内直接调模型，token 边生成边推送
+                // 3. RAG 检索：知识库上下文注入系统提示词（检索失败降级为空上下文）
+                String context = ragRetriever.retrieveContext(userContent);
+
+                // 4. 流式生成：JVM 内直接调模型，token 边生成边推送
                 StringBuilder buffer = new StringBuilder();
-                TokenStream stream = scenicAssistant.chatStream(userContent);
+                TokenStream stream = scenicAssistant.chatStream(context, userContent);
 
                 stream.onPartialResponse(token -> {
                             buffer.append(token);

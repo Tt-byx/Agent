@@ -8,6 +8,7 @@ import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
+import com.scenic.ai.rag.retrieve.RagRetriever;
 import com.scenic.ai.service.ChatService;
 import com.scenic.ai.util.SentimentAnalyzer;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +18,10 @@ import org.springframework.stereotype.Service;
 import java.util.UUID;
 
 /**
- * 对话入口（P2 之后不再转发 Python）。
- * 当前是「单轮模型调用」；P3 起在调用前挂 RAG 检索，P7 起换成 Agent 循环。
+ * 对话入口（P2 起不再转发 Python，P3 起接入 RAG）。
+ *
+ * 当前链路：检索知识库 → 上下文注入系统提示词 → 模型生成。
+ * P7 会把这里换成 Agent 循环（可自主决定是否检索、是否调工具）。
  */
 @Service
 @Slf4j
@@ -26,6 +29,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private ScenicAssistant scenicAssistant;
+
+    @Autowired
+    private RagRetriever ragRetriever;
 
     @Autowired
     private ConversationMapper conversationMapper;
@@ -72,10 +78,13 @@ public class ChatServiceImpl implements ChatService {
         userMsg.setSentiment(SentimentAnalyzer.analyze(request.getMessage()));
         chatMessageMapper.insert(userMsg);
 
-        // 3. 调用 JVM 内的大模型（LangChain4j），不再走 Python
+        // 3. RAG 检索：把知识库上下文注入系统提示词（检索失败会降级为空上下文）
+        String context = ragRetriever.retrieveContext(request.getMessage());
+
+        // 4. 调用 JVM 内的大模型（LangChain4j）
         String reply;
         try {
-            reply = scenicAssistant.chat(request.getMessage());
+            reply = scenicAssistant.chat(context, request.getMessage());
             if (reply == null || reply.isBlank()) {
                 log.warn("模型返回空内容, sessionId={}", sessionId);
                 reply = "抱歉，我这边没有组织出合适的回答，能换个问法再试一次吗？";
@@ -85,7 +94,7 @@ public class ChatServiceImpl implements ChatService {
             reply = "抱歉，AI 服务暂时不可用，请稍后再试。";
         }
 
-        // 4. 保存 AI 回复（含情感分析）
+        // 5. 保存 AI 回复（含情感分析）
         ChatMessage aiMsg = new ChatMessage();
         aiMsg.setConversationId(conversationId);
         aiMsg.setRole("assistant");
