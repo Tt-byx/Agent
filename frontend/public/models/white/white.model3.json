@@ -1,0 +1,87 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "white.moc3",
+		"Textures": [
+			"white.16384/texture_00.png"
+		],
+		"Physics": "white.physics3.json",
+		"DisplayInfo": "white.cdi3.json",
+		"Expressions": [
+			{
+				"Name": "Angry",
+				"File": "expressions/Angry.exp3.json"
+			},
+			{
+				"Name": "Star",
+				"File": "expressions/Star.exp3.json"
+			},
+			{
+				"Name": "Circle",
+				"File": "expressions/Circle.exp3.json"
+			},
+			{
+				"Name": "Cry",
+				"File": "expressions/Cry.exp3.json"
+			},
+			{
+				"Name": "Smile",
+				"File": "expressions/Smile.exp3.json"
+			},
+			{
+				"Name": "Pucker",
+				"File": "expressions/Pucker.exp3.json"
+			},
+			{
+				"Name": "Normal",
+				"File": "expressions/Normal.exp3.json"
+			},
+			{
+				"Name": "Chew",
+				"File": "expressions/Chew.exp3.json"
+			},
+			{
+				"Name": "SideMouth",
+				"File": "expressions/SideMouth.exp3.json"
+			},
+			{
+				"Name": "PokeFace",
+				"File": "expressions/PokeFace.exp3.json"
+			},
+			{
+				"Name": "Mic",
+				"File": "expressions/Mic.exp3.json"
+			},
+			{
+				"Name": "Controller",
+				"File": "expressions/Controller.exp3.json"
+			}
+		],
+		"Motions": []
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		}
+	],
+	"HitAreas": [
+		{
+			"Id": "Part76",
+			"Name": "Head"
+		},
+		{
+			"Id": "Part84",
+			"Name": "Body"
+		}
+	]
+}

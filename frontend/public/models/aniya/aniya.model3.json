@@ -1,0 +1,45 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "ANIYA.moc3",
+		"Textures": [
+			"ANIYA.8192/texture_00.png",
+			"ANIYA.8192/texture_01.png",
+			"ANIYA.8192/texture_02.png",
+			"ANIYA.8192/texture_03.png",
+			"ANIYA.8192/texture_04.png",
+			"ANIYA.8192/texture_05.png"
+		],
+		"Physics": "ANIYA.physics3.json",
+		"DisplayInfo": "ANIYA.cdi3.json",
+		"Expressions": [
+			{ "Name": "Normal", "File": "0.exp3.json" },
+			{ "Name": "Smile", "File": "1.exp3.json" },
+			{ "Name": "Cry", "File": "2.exp3.json" },
+			{ "Name": "Angry", "File": "3.exp3.json" },
+			{ "Name": "Star", "File": "4.exp3.json" },
+			{ "Name": "Circle", "File": "5.exp3.json" },
+			{ "Name": "Pucker", "File": "6.exp3.json" },
+			{ "Name": "Chew", "File": "7.exp3.json" },
+			{ "Name": "SideMouth", "File": "8.exp3.json" },
+			{ "Name": "PokeFace", "File": "9.exp3.json" },
+			{ "Name": "Q", "File": "Q.exp3.json" },
+			{ "Name": "W", "File": "W.exp3.json" },
+			{ "Name": "t", "File": "t.exp3.json" },
+			{ "Name": "u", "File": "u.exp3.json" },
+			{ "Name": "y", "File": "y.exp3.json" }
+		]
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": ["ParamEyeLOpen", "ParamEyeROpen"]
+		}
+	]
+}
