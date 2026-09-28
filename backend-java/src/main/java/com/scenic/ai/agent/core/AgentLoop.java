@@ -133,6 +133,11 @@ public class AgentLoop {
                         .toolSpecifications(toolbox.specifications())
                         .build());
                 aiMessage = response.aiMessage();
+                // token 用量：P8 成本核算的基础
+                if (response.tokenUsage() != null) {
+                    metrics.tokens(response.tokenUsage().inputTokenCount(),
+                            response.tokenUsage().outputTokenCount());
+                }
             } catch (Exception e) {
                 log.error("Agent 第 {} 步模型调用失败: {}", step, e.getMessage(), e);
                 metrics.runAborted();

@@ -1,5 +1,7 @@
 package com.scenic.ai.config;
 
+import com.scenic.ai.gateway.AgentMetrics;
+import com.scenic.ai.gateway.RoutedChatModel;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import lombok.extern.slf4j.Slf4j;
@@ -8,9 +10,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * LangChain4j 装配：大模型客户端 + 声明式 AiService。
+ * LangChain4j 装配：大模型客户端（P8 起为主备路由）。
  *
  * 模型走 OpenAI 兼容协议，替换 base-url / chat-model 即可切到 MiMo / DeepSeek / 百炼。
  * 密钥不写进仓库：来自环境变量或 application-local.yml（见 application.yml 的注释）。
@@ -40,20 +44,58 @@ public class LangChain4jConfig {
     @Value("${llm.max-retries:2}")
     private Integer maxRetries;
 
+    @Value("${llm.fallback.enabled:true}")
+    private boolean fallbackEnabled;
+
+    @Value("${llm.fallback.base-url:https://api.siliconflow.cn/v1}")
+    private String fallbackBaseUrl;
+
+    @Value("${llm.fallback.api-key:${SCENIC_FALLBACK_API_KEY:}}")
+    private String fallbackApiKey;
+
+    @Value("${llm.fallback.model:deepseek-ai/DeepSeek-V4-Flash}")
+    private String fallbackModel;
+
     @Bean
-    public ChatModel chatModel() {
+    public ChatModel chatModel(AgentMetrics metrics) {
         warnIfKeyMissing();
-        return OpenAiChatModel.builder()
-                .baseUrl(baseUrl)
-                .apiKey(effectiveApiKey())
-                .modelName(chatModelName)
-                .temperature(temperature)
-                .maxTokens(maxTokens)
-                .timeout(Duration.ofSeconds(timeoutSeconds))
-                .maxRetries(maxRetries)
-                .logRequests(false)
-                .logResponses(false)
-                .build();
+
+        // P8 · 主备路由：主模型异常时自动切到备模型（可跨厂商，只要兼容 OpenAI 协议）
+        List<RoutedChatModel.Route> routes = new ArrayList<>();
+        routes.add(new RoutedChatModel.Route(
+                "primary:" + chatModelName,
+                OpenAiChatModel.builder()
+                        .baseUrl(baseUrl)
+                        .apiKey(effectiveApiKey())
+                        .modelName(chatModelName)
+                        .temperature(temperature)
+                        .maxTokens(maxTokens)
+                        .timeout(Duration.ofSeconds(timeoutSeconds))
+                        .maxRetries(maxRetries)
+                        .logRequests(false)
+                        .logResponses(false)
+                        .build()));
+
+        if (fallbackEnabled && fallbackApiKey != null && !fallbackApiKey.isBlank()) {
+            routes.add(new RoutedChatModel.Route(
+                    "fallback:" + fallbackModel,
+                    OpenAiChatModel.builder()
+                            .baseUrl(fallbackBaseUrl)
+                            .apiKey(fallbackApiKey)
+                            .modelName(fallbackModel)
+                            .temperature(temperature)
+                            .maxTokens(maxTokens)
+                            .timeout(Duration.ofSeconds(timeoutSeconds))
+                            .maxRetries(1)
+                            .logRequests(false)
+                            .logResponses(false)
+                            .build()));
+            log.info("[ROUTE] 已启用备用模型：{} @ {}", fallbackModel, fallbackBaseUrl);
+        } else {
+            log.warn("[ROUTE] 未配置备用模型（llm.fallback.api-key 为空），主模型故障时将直接报错");
+        }
+
+        return new RoutedChatModel(routes, metrics);
     }
 
     // P7：原先这里还有两个 Bean —— streamingChatModel 与声明式 AiService（ScenicAssistant），

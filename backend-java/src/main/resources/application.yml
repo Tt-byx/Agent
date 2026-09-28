@@ -53,6 +53,12 @@ llm:
   max-tokens: 4096
   timeout-seconds: 120
   max-retries: 2
+  # P8 · 备用模型（跨厂商降级）：主模型异常时自动切换。硅基流动与 DeepSeek 官方是同款模型
+  fallback:
+    enabled: true
+    base-url: ${SCENIC_FALLBACK_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${SCENIC_FALLBACK_API_KEY:${SCENIC_EMBEDDING_API_KEY:}}
+    model: ${SCENIC_FALLBACK_MODEL:deepseek-ai/DeepSeek-V4-Flash}
 
 # Embedding（OpenAI 兼容，当前接硅基流动 bge-m3，输出维度 1024）
 embedding:
@@ -134,6 +140,13 @@ cache:
     enabled: true
     # 命中阈值：语义相似度必须高于此值才复用答案
     min-score: 0.92
+
+# P8 · 网关
+gateway:
+  rate-limit:
+    enabled: true
+    # 每个游客（visitorId/IP）每分钟最多的对话请求数
+    per-minute: 20
 
 management:
   endpoints:

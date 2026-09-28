@@ -1,0 +1,101 @@
+{
+  "title": "灵山胜境 Agent 运行观测（P8）",
+  "uid": "scenic-agent-p8",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Agent 总执行次数",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{ "expr": "sum(scenic_agent_runs_total)", "refId": "A" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "强制收口次数（步数上限/超时）",
+      "description": "应为 0 或极低，否则说明 Agent 自主性失控",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [{ "expr": "sum(scenic_agent_runs_aborted_total)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [
+        { "color": "green", "value": null }, { "color": "red", "value": 1 }
+      ] } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "语义缓存命中率",
+      "description": "命中即不调用模型，边际成本为 0",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [{
+        "expr": "sum(scenic_cache_hits_total) / (sum(scenic_cache_hits_total) + sum(scenic_cache_misses_total)) * 100",
+        "refId": "A"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [
+        { "color": "red", "value": null }, { "color": "yellow", "value": 30 }, { "color": "green", "value": 60 }
+      ] } } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "工具调用失败次数",
+      "description": "失败会被回灌给模型自纠，但仍需关注稳定性",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [{ "expr": "sum(scenic_agent_tool_failures_total)", "refId": "A" }]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "输入 / 输出 token",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [
+        { "expr": "sum(scenic_llm_tokens_input_total)", "refId": "A", "legendFormat": "input" },
+        { "expr": "sum(scenic_llm_tokens_output_total)", "refId": "B", "legendFormat": "output" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "主/备模型调用情况（P8 多模型路由）",
+      "description": "主模型失败而备模型成功 = 发生过降级；备模型持续承压说明主模型有问题",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum by (route, result) (rate(scenic_llm_route_calls_total[5m]))", "refId": "A", "legendFormat": "{{route}} {{result}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "模型调用耗时分布（P95 看瓶颈）",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "sum by (route) (rate(scenic_llm_route_duration_seconds_sum[5m])) / sum by (route) (rate(scenic_llm_route_duration_seconds_count[5m]))", "refId": "A", "legendFormat": "{{route}} 平均" },
+        { "expr": "scenic_llm_route_duration_seconds_max", "refId": "B", "legendFormat": "{{route}} 最大" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "缓存命中 / 未命中（速率）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "sum(rate(scenic_cache_hits_total[5m]))", "refId": "A", "legendFormat": "命中" },
+        { "expr": "sum(rate(scenic_cache_misses_total[5m]))", "refId": "B", "legendFormat": "未命中" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Agent 工具调用（含失败）",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "sum(rate(scenic_agent_tool_calls_total[5m]))", "refId": "A", "legendFormat": "调用" },
+        { "expr": "sum(rate(scenic_agent_tool_failures_total[5m]))", "refId": "B", "legendFormat": "失败" }
+      ]
+    }
+  ]
+}

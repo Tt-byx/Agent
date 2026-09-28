@@ -25,8 +25,12 @@ public class AgentMetrics {
     private final Counter cacheMisses;
     private final Counter memoryWrites;
     private final Counter memoryRecalls;
+    private final Counter inputTokens;
+    private final Counter outputTokens;
+    private final MeterRegistry registry;
 
     public AgentMetrics(MeterRegistry registry) {
+        this.registry = registry;
         agentRuns = Counter.builder("scenic.agent.runs")
                 .description("Agent 循环总次数").register(registry);
         agentRunsConverged = Counter.builder("scenic.agent.runs.converged")
@@ -45,6 +49,31 @@ public class AgentMetrics {
                 .description("长期记忆写入次数").register(registry);
         memoryRecalls = Counter.builder("scenic.memory.recalls")
                 .description("长期记忆召回次数（有召回到内容）").register(registry);
+        inputTokens = Counter.builder("scenic.llm.tokens.input")
+                .description("LLM 输入 token 总量").register(registry);
+        outputTokens = Counter.builder("scenic.llm.tokens.output")
+                .description("LLM 输出 token 总量").register(registry);
+    }
+
+    /** 模型路由结果（带 route 标签，用于对比主/备模型的健康状况与延迟） */
+    public void routeSucceeded(String route, long durationMillis) {
+        registry.counter("scenic.llm.route.calls", "route", route, "result", "success").increment();
+        registry.timer("scenic.llm.route.duration", "route", route)
+                .record(durationMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    public void routeFailed(String route) {
+        registry.counter("scenic.llm.route.calls", "route", route, "result", "failure").increment();
+    }
+
+    /** token 用量：成本核算的基础（P8 验收 ④） */
+    public void tokens(Integer input, Integer output) {
+        if (input != null) {
+            inputTokens.increment(input);
+        }
+        if (output != null) {
+            outputTokens.increment(output);
+        }
     }
 
     public void runStarted() {
