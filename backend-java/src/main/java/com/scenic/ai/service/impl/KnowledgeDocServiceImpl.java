@@ -3,25 +3,30 @@ package com.scenic.ai.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.scenic.ai.entity.KnowledgeDoc;
 import com.scenic.ai.mapper.KnowledgeDocMapper;
+import com.scenic.ai.rag.ingest.DocumentIngestionService;
 import com.scenic.ai.service.KnowledgeDocService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.util.*;
+import java.util.List;
+import java.util.UUID;
 
+/**
+ * 知识库文档服务。
+ *
+ * 2026-09-28（A1 修复）：向量化与删除向量**不再转发 Python**，
+ * 改为直接调用 JVM 内的 {@link DocumentIngestionService}。
+ * 原先那段「手工拼请求 + 逐行解析 SSE 进度」的代码（约 60 行）已整体删除。
+ */
 @Service
 public class KnowledgeDocServiceImpl implements KnowledgeDocService {
 
@@ -31,16 +36,10 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
     private KnowledgeDocMapper knowledgeDocMapper;
 
     @Autowired
-    private RestTemplate restTemplate;
-
-    @Autowired
-    private ObjectMapper objectMapper;
+    private DocumentIngestionService ingestionService;
 
     @Value("${scenic.upload.dir}")
     private String uploadDir;
-
-    @Value("${python.backend.url}")
-    private String pythonBackendUrl;
 
     @Override
     public KnowledgeDoc upload(String title, MultipartFile file, String category, String scenicArea) {
@@ -79,6 +78,8 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         doc.setUpdatedAt(LocalDateTime.now());
         knowledgeDocMapper.insert(doc);
 
+        // 注意：这里**不**自动向量化。前端流程是「先 /upload 拿到 id，再显式调 /process/{id}」，
+        // 在这里触发会让同一份文档被处理两次（幂等但白白多烧一轮 embedding）。
         return doc;
     }
 
@@ -90,98 +91,31 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
             throw new RuntimeException("文档不存在: " + id);
         }
 
-        // 更新状态为处理中
-        doc.setVectorStatus(1);
-        doc.setProcessStage("parsing");
-        doc.setProcessProgress(0);
-        doc.setUpdatedAt(LocalDateTime.now());
-        knowledgeDocMapper.updateById(doc);
-
+        updateProgress(id, 1, "parsing", 0);
         log.info("开始处理文档: id={}, file={}", id, doc.getFileUrl());
 
         try {
-            // 调用 Python 处理接口（SSE 流式返回进度）
-            URL url = new URL(pythonBackendUrl + "/api/knowledge/process");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(300000); // 5分钟
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            DocumentIngestionService.IngestResult result = ingestionService.ingest(
+                    doc.getId(),
+                    doc.getTitle(),
+                    Path.of(doc.getFileUrl()),
+                    doc.getFileType(),
+                    (stage, percent) -> updateProgress(id, 1, stage, percent));
 
-            // 发送 JSON 请求体
-            Map<String, Object> request = new HashMap<>();
-            request.put("doc_id", doc.getId());
-            request.put("file_path", doc.getFileUrl());
-            request.put("file_type", doc.getFileType());
-            request.put("doc_title", doc.getTitle());
-
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(objectMapper.writeValueAsBytes(request));
-                os.flush();
+            KnowledgeDoc latest = knowledgeDocMapper.selectById(id);
+            if (latest != null) {
+                latest.setVectorStatus(2); // 完成
+                latest.setProcessStage("completed");
+                latest.setProcessProgress(100);
+                latest.setChunkCount(result.chunkCount());
+                latest.setUpdatedAt(LocalDateTime.now());
+                knowledgeDocMapper.updateById(latest);
             }
-
-            // 读取 SSE 流式响应
-            int chunkCount = 0;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-                String currentEvent = "";
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (line.startsWith("event: ")) {
-                        currentEvent = line.substring(7).trim();
-                    } else if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        try {
-                            Map<String, Object> eventData = objectMapper.readValue(data, Map.class);
-
-                            if ("progress".equals(currentEvent)) {
-                                // 更新进度
-                                String stage = (String) eventData.get("stage");
-                                Number progress = (Number) eventData.get("progress");
-                                doc = knowledgeDocMapper.selectById(id);
-                                if (doc != null) {
-                                    doc.setProcessStage(stage);
-                                    doc.setProcessProgress(progress.intValue());
-                                    doc.setUpdatedAt(LocalDateTime.now());
-                                    knowledgeDocMapper.updateById(doc);
-                                }
-                                log.debug("文档处理进度: id={}, stage={}, progress={}%", id, stage, progress);
-                            } else if ("done".equals(currentEvent)) {
-                                Number cc = (Number) eventData.get("chunk_count");
-                                chunkCount = cc != null ? cc.intValue() : 0;
-                            } else if ("error".equals(currentEvent)) {
-                                throw new RuntimeException((String) eventData.get("message"));
-                            }
-                        } catch (Exception e) {
-                            if ("SSE解析".equals(e.getMessage())) continue;
-                            throw e;
-                        }
-                    }
-                }
-            }
-
-            // 处理完成
-            doc = knowledgeDocMapper.selectById(id);
-            if (doc != null) {
-                doc.setVectorStatus(2); // 完成
-                doc.setProcessStage("completed");
-                doc.setProcessProgress(100);
-                doc.setChunkCount(chunkCount);
-                doc.setUpdatedAt(LocalDateTime.now());
-                knowledgeDocMapper.updateById(doc);
-            }
-            log.info("文档处理完成: id={}, chunkCount={}", id, chunkCount);
+            log.info("文档处理完成: id={}, chunkCount={}", id, result.chunkCount());
 
         } catch (Exception e) {
-            log.error("文档处理失败: id={}, error={}", id, e.getMessage());
-            doc = knowledgeDocMapper.selectById(id);
-            if (doc != null) {
-                doc.setVectorStatus(3); // 失败
-                doc.setProcessStage("failed");
-                doc.setUpdatedAt(LocalDateTime.now());
-                knowledgeDocMapper.updateById(doc);
-            }
+            log.error("文档处理失败: id={}, error={}", id, e.getMessage(), e);
+            updateProgress(id, 3, "failed", 0);
         }
     }
 
@@ -235,9 +169,9 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         doc.setUpdatedAt(LocalDateTime.now());
         knowledgeDocMapper.updateById(doc);
 
-        // 如果内容变更，自动触发重向量化
-        if (contentChanged) {
-            reprocess(id);
+        // 标题/分类变更也要重算向量元数据，内容变更更要重切
+        if (contentChanged || updateData.getTitle() != null) {
+            process(id);
         }
 
         return knowledgeDocMapper.selectById(id);
@@ -254,11 +188,8 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         doc.setUpdatedAt(LocalDateTime.now());
         knowledgeDocMapper.updateById(doc);
 
-        try {
-            restTemplate.delete(pythonBackendUrl + "/api/knowledge/" + id);
-        } catch (Exception e) {
-            log.warn("删除向量失败（不影响软删除）: {}", e.getMessage());
-        }
+        // 同步删除向量与关键词索引（原先是调 Python，现已迁入 JVM）
+        ingestionService.deleteDocument(id);
     }
 
     @Override
@@ -268,13 +199,21 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
             throw new RuntimeException("文档不存在: " + id);
         }
 
-        doc.setVectorStatus(1);
-        doc.setProcessStage("parsing");
-        doc.setProcessProgress(0);
+        updateProgress(id, 1, "parsing", 0);
+        process(id);
+    }
+
+    /** 统一的状态更新入口，避免各处重复拼字段 */
+    private void updateProgress(Long id, int vectorStatus, String stage, int progress) {
+        KnowledgeDoc doc = knowledgeDocMapper.selectById(id);
+        if (doc == null) {
+            return;
+        }
+        doc.setVectorStatus(vectorStatus);
+        doc.setProcessStage(stage);
+        doc.setProcessProgress(progress);
         doc.setUpdatedAt(LocalDateTime.now());
         knowledgeDocMapper.updateById(doc);
-
-        process(id);
     }
 
     private String getFileExtension(String filename) {
