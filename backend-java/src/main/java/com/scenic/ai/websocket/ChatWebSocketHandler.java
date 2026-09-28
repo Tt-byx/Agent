@@ -1,6 +1,7 @@
 package com.scenic.ai.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scenic.ai.agent.ScenicAssistant;
 import com.scenic.ai.controller.AuthController;
 import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
@@ -10,23 +11,26 @@ import com.scenic.ai.mapper.ConversationMapper;
 import com.scenic.ai.mapper.VisitorProfileTagMapper;
 import com.scenic.ai.util.SentimentAnalyzer;
 import com.scenic.ai.util.TagExtractor;
+import dev.langchain4j.service.TokenStream;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 纯文本对话 WebSocket 处理器（Agent 改造后）。
- * 数字人与语音链路已于 2026-09-28 移除，仅保留文字流式对话。
+ * 纯文本对话 WebSocket 处理器（P2：模型调用已从 Python 迁到 JVM 内）。
+ *
+ * 数字人与语音链路已于 2026-09-28 移除；Python 侧的 SSE 转发已于 P2 移除，
+ * 现在由 LangChain4j 的 TokenStream 直接向前端推送 token。
  */
 @Component
 @Slf4j
@@ -38,6 +42,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private ObjectMapper objectMapper;
 
     @Autowired
+    private ScenicAssistant scenicAssistant;
+
+    @Autowired
     private ConversationMapper conversationMapper;
 
     @Autowired
@@ -45,9 +52,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     @Autowired
     private VisitorProfileTagMapper visitorProfileTagMapper;
-
-    @Value("${python.backend.url:http://localhost:8000}")
-    private String pythonBackendUrl;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -99,117 +103,22 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
-     * 流式读取 SSE 响应，逐行解析并转发给前端
-     * @return done 事件中的 total_text（AI 完整回复），用于保存数据库
-     */
-    private String streamPythonSSE(WebSocketSession session, String endpoint, Map<String, String> formFields) {
-        String totalText = "";
-        java.net.HttpURLConnection conn = null;
-        String boundary = "----WebKitFormBoundary" + System.currentTimeMillis();
-        try {
-            java.net.URL url = new java.net.URL(pythonBackendUrl + endpoint);
-            conn = (java.net.HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(120000);
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-            conn.setChunkedStreamingMode(8192);
-
-            // 构建 multipart body（仅表单字段）
-            try (var os = conn.getOutputStream();
-                 var writer = new java.io.OutputStreamWriter(os, java.nio.charset.StandardCharsets.UTF_8)) {
-                for (Map.Entry<String, String> entry : formFields.entrySet()) {
-                    if (entry.getValue() == null) continue;
-                    writer.write("--" + boundary + "\r\n");
-                    writer.write("Content-Disposition: form-data; name=\"" + entry.getKey() + "\"\r\n\r\n");
-                    writer.write(entry.getValue() + "\r\n");
-                    writer.flush();
-                }
-                writer.write("--" + boundary + "--\r\n");
-                writer.flush();
-            }
-
-            // 检查响应状态码
-            int responseCode = conn.getResponseCode();
-            if (responseCode >= 400) {
-                java.io.InputStream errorStream = conn.getErrorStream();
-                if (errorStream != null) {
-                    String errorBody = new String(errorStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    log.error("Python 返回错误 {}: {}", responseCode, errorBody);
-                    trySendToClient(session, WebSocketMessage.error("AI 服务错误: " + responseCode));
-                }
-                return totalText;
-            }
-
-            // 流式读取 SSE 响应
-            try (var reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                String currentEvent = "";
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-                    if (line.startsWith("event: ")) {
-                        currentEvent = line.substring(7).trim();
-                    } else if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        try {
-                            switch (currentEvent) {
-                                case "text_chunk":
-                                    Map<String, Object> textData = objectMapper.readValue(data, Map.class);
-                                    sendToClient(session, WebSocketMessage.textChunk((String) textData.get("text")));
-                                    break;
-                                case "done":
-                                    Map<String, Object> doneData = objectMapper.readValue(data, Map.class);
-                                    totalText = (String) doneData.getOrDefault("total_text", "");
-                                    sendToClient(session, WebSocketMessage.done(
-                                            (String) doneData.get("session_id"),
-                                            totalText
-                                    ));
-                                    break;
-                                case "error":
-                                    Map<String, Object> errData = objectMapper.readValue(data, Map.class);
-                                    sendToClient(session, WebSocketMessage.error((String) errData.get("message")));
-                                    break;
-                                default:
-                                    break;
-                            }
-                        } catch (Exception e) {
-                            log.error("解析 SSE 数据失败: {}", data, e);
-                        }
-                    }
-                }
-            }
-        } catch (java.net.SocketTimeoutException e) {
-            log.error("Python SSE 流读取超时: {}", e.getMessage());
-            trySendToClient(session, WebSocketMessage.error("AI 服务响应超时"));
-        } catch (Exception e) {
-            log.error("Python SSE 流读取失败: {}", e.getMessage(), e);
-            trySendToClient(session, WebSocketMessage.error("AI 服务暂时不可用"));
-        } finally {
-            if (conn != null) conn.disconnect();
-        }
-        return totalText;
-    }
-
-    /**
-     * 处理文字对话：调 Python /api/chat/stream (multipart)，流式转发给前端
+     * 处理文字对话：落库 → LangChain4j 流式生成 → 逐 token 推送前端 → 落库 AI 回复
      */
     private void handleTextChat(WebSocketSession session, WebSocketMessage msg) {
         log.info("handleTextChat 开始处理: {}", msg.getContent().length() > 30
                 ? msg.getContent().substring(0, 30) + "..." : msg.getContent());
+
         CompletableFuture.runAsync(() -> {
             try {
-                // 1. 保存会话和用户消息到数据库
+                // 1. 解析 / 创建会话
                 String sessionId = msg.getSessionId();
                 Long conversationId = null;
 
                 if (sessionId != null && !sessionId.isEmpty()) {
-                    com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Conversation> wrapper =
+                    Conversation conv = conversationMapper.selectOne(
                             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Conversation>()
-                                    .eq(Conversation::getSessionId, sessionId);
-                    Conversation conv = conversationMapper.selectOne(wrapper);
+                                    .eq(Conversation::getSessionId, sessionId));
                     if (conv != null) {
                         conversationId = conv.getId();
                     }
@@ -217,7 +126,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
                 if (conversationId == null) {
                     Conversation newConv = new Conversation();
-                    newConv.setSessionId(sessionId != null ? sessionId : java.util.UUID.randomUUID().toString());
+                    newConv.setSessionId(sessionId != null && !sessionId.isEmpty()
+                            ? sessionId : UUID.randomUUID().toString());
                     newConv.setTitle(generateTitle(msg.getContent()));
                     Object userIdObj = session.getAttributes().get("userId");
                     if (userIdObj instanceof Long) {
@@ -231,38 +141,55 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     sessionId = newConv.getSessionId();
                 }
 
+                final String finalSessionId = sessionId;
+                final Long finalConversationId = conversationId;
+                final Long userId = (Long) session.getAttributes().get("userId");
+                final String userContent = msg.getContent();
+
+                // 2. 用户消息落库
                 ChatMessage userMsg = new ChatMessage();
-                userMsg.setConversationId(conversationId);
+                userMsg.setConversationId(finalConversationId);
                 userMsg.setRole("user");
-                userMsg.setContent(msg.getContent());
-                userMsg.setSentiment(SentimentAnalyzer.analyze(msg.getContent()));
+                userMsg.setContent(userContent);
+                userMsg.setSentiment(SentimentAnalyzer.analyze(userContent));
                 userMsg.setCreatedAt(java.time.LocalDateTime.now());
                 chatMessageMapper.insert(userMsg);
 
-                // 2. 构建表单字段，流式调 Python /api/chat/stream
-                Map<String, String> formFields = new java.util.LinkedHashMap<>();
-                formFields.put("message", msg.getContent());
-                formFields.put("session_id", sessionId != null ? sessionId : "");
+                // 3. 流式生成：JVM 内直接调模型，token 边生成边推送
+                StringBuilder buffer = new StringBuilder();
+                TokenStream stream = scenicAssistant.chatStream(userContent);
 
-                // 流式读取 SSE，边收边转发给前端，返回 AI 完整回复
-                String aiReply = streamPythonSSE(session, "/api/chat/stream", formFields);
+                stream.onPartialResponse(token -> {
+                            buffer.append(token);
+                            sendToClient(session, WebSocketMessage.textChunk(token));
+                        })
+                        .onCompleteResponse(response -> {
+                            String aiReply = buffer.toString();
+                            log.info("生成完成, sessionId={}, 长度={}", finalSessionId, aiReply.length());
 
-                // 3. 保存 AI 回复到数据库
-                if (aiReply != null && !aiReply.isEmpty()) {
-                    ChatMessage aiMsg = new ChatMessage();
-                    aiMsg.setConversationId(conversationId);
-                    aiMsg.setRole("assistant");
-                    aiMsg.setContent(aiReply);
-                    aiMsg.setSentiment(SentimentAnalyzer.analyze(aiReply));
-                    aiMsg.setCreatedAt(java.time.LocalDateTime.now());
-                    chatMessageMapper.insert(aiMsg);
-                }
+                            // 4. AI 回复落库
+                            if (!aiReply.isEmpty()) {
+                                ChatMessage aiMsg = new ChatMessage();
+                                aiMsg.setConversationId(finalConversationId);
+                                aiMsg.setRole("assistant");
+                                aiMsg.setContent(aiReply);
+                                aiMsg.setSentiment(SentimentAnalyzer.analyze(aiReply));
+                                aiMsg.setCreatedAt(java.time.LocalDateTime.now());
+                                chatMessageMapper.insert(aiMsg);
+                            }
 
-                // 4. 提取用户兴趣标签（从用户消息中）
-                Long uid = (Long) session.getAttributes().get("userId");
-                if (uid != null) {
-                    extractAndUpdateTags(uid, msg.getContent());
-                }
+                            sendToClient(session, WebSocketMessage.done(finalSessionId, aiReply));
+
+                            // 5. 兴趣标签提取
+                            if (userId != null) {
+                                extractAndUpdateTags(userId, userContent);
+                            }
+                        })
+                        .onError(error -> {
+                            log.error("流式生成失败, sessionId={}: {}", finalSessionId, error.getMessage(), error);
+                            trySendToClient(session, WebSocketMessage.error("AI 服务暂时不可用: " + error.getMessage()));
+                        })
+                        .start();
 
             } catch (Exception e) {
                 log.error("[ERROR] 文字对话失败: {}", e.getMessage(), e);

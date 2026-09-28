@@ -7,6 +7,9 @@
       enabled: true
 
 spring:
+  # 本地私有配置（密钥等），不进版本库；文件不存在也不影响启动
+  config:
+    import: optional:classpath:application-local.yml
   datasource:
     url: jdbc:mysql://localhost:3306/scenic_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
@@ -29,10 +32,21 @@ mybatis-plus:
     db-config:
       id-type: auto
 
-# Python 后端地址
+# Python 后端地址（P2 后对话链路已不再依赖它；知识库处理与健康检查随 P3 迁移后移除）
 python:
   backend:
     url: http://localhost:9000
+
+# 大模型配置（OpenAI 兼容：MiMo / DeepSeek / 百炼 均可直接替换 base-url 与 model）
+# 注意：密钥不要写在本文件（仓库公开）。放 src/main/resources/application-local.yml 或设环境变量。
+llm:
+  base-url: ${SCENIC_LLM_BASE_URL:https://api.xiaomimimo.com/v1}
+  api-key: ${SCENIC_LLM_API_KEY:}
+  chat-model: ${SCENIC_LLM_MODEL:mimo-v2.5-pro}
+  temperature: 0.7
+  max-tokens: 1024
+  timeout-seconds: 60
+  max-retries: 2
 
 # WebSocket 配置
 websocket:

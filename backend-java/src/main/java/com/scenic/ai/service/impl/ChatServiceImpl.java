@@ -1,6 +1,7 @@
 package com.scenic.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.scenic.ai.agent.ScenicAssistant;
 import com.scenic.ai.dto.ChatRequest;
 import com.scenic.ai.dto.ChatResponse;
 import com.scenic.ai.entity.ChatMessage;
@@ -11,23 +12,20 @@ import com.scenic.ai.service.ChatService;
 import com.scenic.ai.util.SentimentAnalyzer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 对话入口（P2 之后不再转发 Python）。
+ * 当前是「单轮模型调用」；P3 起在调用前挂 RAG 检索，P7 起换成 Agent 循环。
+ */
 @Service
 @Slf4j
 public class ChatServiceImpl implements ChatService {
 
-    @Value("${python.backend.url:http://localhost:8000}")
-    private String pythonBackendUrl;
-
     @Autowired
-    private RestTemplate restTemplate;
+    private ScenicAssistant scenicAssistant;
 
     @Autowired
     private ConversationMapper conversationMapper;
@@ -36,7 +34,6 @@ public class ChatServiceImpl implements ChatService {
     private ChatMessageMapper chatMessageMapper;
 
     @Override
-    @SuppressWarnings("unchecked")
     public ChatResponse chat(ChatRequest request) {
         // 1. 处理会话ID
         String sessionId = request.getSessionId();
@@ -56,7 +53,6 @@ public class ChatServiceImpl implements ChatService {
                             .eq(Conversation::getSessionId, sessionId)
             );
             if (conversation == null) {
-                // 会话不存在，创建新的
                 Conversation newConv = new Conversation();
                 newConv.setSessionId(sessionId);
                 String title = request.getMessage();
@@ -76,31 +72,27 @@ public class ChatServiceImpl implements ChatService {
         userMsg.setSentiment(SentimentAnalyzer.analyze(request.getMessage()));
         chatMessageMapper.insert(userMsg);
 
-        // 3. 调用 Python 后端
-        Map<String, String> pythonRequest = new HashMap<>();
-        pythonRequest.put("message", request.getMessage());
-
+        // 3. 调用 JVM 内的大模型（LangChain4j），不再走 Python
+        String reply;
         try {
-            Map<String, Object> pythonResponse = restTemplate.postForObject(
-                    pythonBackendUrl + "/api/chat",
-                    pythonRequest,
-                    Map.class
-            );
-
-            String reply = (String) pythonResponse.get("reply");
-
-            // 4. 保存 AI 回复（含情感分析）
-            ChatMessage aiMsg = new ChatMessage();
-            aiMsg.setConversationId(conversationId);
-            aiMsg.setRole("assistant");
-            aiMsg.setContent(reply);
-            aiMsg.setSentiment(SentimentAnalyzer.analyze(reply));
-            chatMessageMapper.insert(aiMsg);
-
-            return new ChatResponse(reply, sessionId);
+            reply = scenicAssistant.chat(request.getMessage());
+            if (reply == null || reply.isBlank()) {
+                log.warn("模型返回空内容, sessionId={}", sessionId);
+                reply = "抱歉，我这边没有组织出合适的回答，能换个问法再试一次吗？";
+            }
         } catch (Exception e) {
-            log.error("调用Python后端失败: {}", e.getMessage());
-            return new ChatResponse("抱歉，AI服务暂时不可用，请稍后再试。", sessionId);
+            log.error("大模型调用失败, sessionId={}: {}", sessionId, e.getMessage(), e);
+            reply = "抱歉，AI 服务暂时不可用，请稍后再试。";
         }
+
+        // 4. 保存 AI 回复（含情感分析）
+        ChatMessage aiMsg = new ChatMessage();
+        aiMsg.setConversationId(conversationId);
+        aiMsg.setRole("assistant");
+        aiMsg.setContent(reply);
+        aiMsg.setSentiment(SentimentAnalyzer.analyze(reply));
+        chatMessageMapper.insert(aiMsg);
+
+        return new ChatResponse(reply, sessionId);
     }
 }

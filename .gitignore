@@ -120,3 +120,10 @@ HELP.md
 # 临时文件
 # ========================
 .wb_tmp.txt
+*.wb_tmp.txt
+
+# ========================
+# 本地私有配置（含大模型密钥，绝不上传）
+# ========================
+application-local.yml
+application-local.yaml
