@@ -1,6 +1,7 @@
 package com.scenic.ai.config;
 
 import com.scenic.ai.agent.ScenicAssistant;
+import com.scenic.ai.agent.tools.ScenicTools;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
@@ -79,10 +80,15 @@ public class LangChain4jConfig {
      * 后续 RAG（P3）/ 工具（P5）/ 记忆（P8）都挂在这一层之上。
      */
     @Bean
-    public ScenicAssistant scenicAssistant(ChatModel chatModel, StreamingChatModel streamingChatModel) {
+    public ScenicAssistant scenicAssistant(ChatModel chatModel,
+                                           StreamingChatModel streamingChatModel,
+                                           ScenicTools scenicTools) {
         return AiServices.builder(ScenicAssistant.class)
                 .chatModel(chatModel)
                 .streamingChatModel(streamingChatModel)
+                // P5：注册工具。LangChain4j 负责把 @Tool 生成 function schema、
+                // 执行模型选中的工具、再把结果回灌给模型做二次回答（含并行调用）。
+                .tools(scenicTools)
                 .build();
     }
 
