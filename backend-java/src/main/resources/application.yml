@@ -120,6 +120,9 @@ agent:
   # 故障注入工具开关：仅用于验收「工具失败后 Agent 能自纠或优雅告知」
   debug-tools:
     enabled: false
+  # P9 · 多 Agent 编排（Supervisor）：开启后对话由调度者委派给专家 Agent
+  multi:
+    enabled: false
 
 # P8 · 记忆体系
 memory:

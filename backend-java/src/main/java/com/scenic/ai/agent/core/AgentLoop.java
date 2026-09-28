@@ -100,6 +100,15 @@ public class AgentLoop {
      *                  退化为 sessionId（此时记忆只在本会话内有效）
      */
     public Result run(String sessionId, String memoryKey, String userMessage) {
+        return runWith(sessionId, memoryKey, userMessage, toolbox, baseSystemPrompt);
+    }
+
+    /**
+     * P9 · 可注入工具箱与系统提示词的循环入口。
+     * 多 Agent 编排时：Supervisor 传「只含委派工具」的工具箱，各专家传「按名单裁剪」的工具箱。
+     */
+    public Result runWith(String sessionId, String memoryKey, String userMessage,
+                          AgentToolbox agentToolbox, String systemPrompt) {
         metrics.runStarted();
 
         // ===== P8：语义缓存命中则直接返回，跳过整条链路 =====
@@ -113,7 +122,7 @@ public class AgentLoop {
 
         // ===== P8：组装带记忆的系统提示词 =====
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(buildSystemMessage(memoryKey, userMessage)));
+        messages.add(SystemMessage.from(buildSystemMessage(systemPrompt, memoryKey, userMessage)));
         messages.add(UserMessage.from(userMessage));
 
         List<Step> trace = new ArrayList<>();
@@ -130,7 +139,7 @@ public class AgentLoop {
             try {
                 ChatResponse response = chatModel.chat(ChatRequest.builder()
                         .messages(messages)
-                        .toolSpecifications(toolbox.specifications())
+                        .toolSpecifications(agentToolbox.specifications())
                         .build());
                 aiMessage = response.aiMessage();
                 // token 用量：P8 成本核算的基础
@@ -163,7 +172,7 @@ public class AgentLoop {
             try {
                 for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
                     metrics.toolCalled();
-                    String observation = toolbox.execute(request, sessionId);
+                    String observation = agentToolbox.execute(request, sessionId);
                     boolean failed = observation.contains("执行失败：");
                     if (failed) {
                         metrics.toolFailed();
@@ -185,8 +194,8 @@ public class AgentLoop {
      * 组装带记忆的系统提示词：
      * 基础人设与规则 + 长期偏好（跨会话）+ 短期摘要与本轮上下文（会话内）。
      */
-    private String buildSystemMessage(String memoryKey, String query) {
-        StringBuilder sb = new StringBuilder(baseSystemPrompt);
+    private String buildSystemMessage(String basePrompt, String memoryKey, String query) {
+        StringBuilder sb = new StringBuilder(basePrompt);
 
         // 长期偏好（跨会话）
         List<String> preferences = longTermMemory.recall(memoryKey, query);

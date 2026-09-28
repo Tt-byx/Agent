@@ -2,6 +2,7 @@ package com.scenic.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.scenic.ai.agent.core.AgentLoop;
+import com.scenic.ai.agent.multi.MultiAgentOrchestrator;
 import com.scenic.ai.dto.ChatRequest;
 import com.scenic.ai.dto.ChatResponse;
 import com.scenic.ai.entity.ChatMessage;
@@ -29,6 +30,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private AgentLoop agentLoop;
+
+    @Autowired
+    private MultiAgentOrchestrator multiAgentOrchestrator;
 
     @Autowired
     private ConversationMapper conversationMapper;
@@ -75,11 +79,13 @@ public class ChatServiceImpl implements ChatService {
         userMsg.setSentiment(SentimentAnalyzer.analyze(request.getMessage()));
         chatMessageMapper.insert(userMsg);
 
-        // 3. 交给 Agent 循环：自主检索 / 调工具 / 多步收敛
+        // 3. 交给 Agent：默认单 Agent（ReAct）；开启 agent.multi 后走 Supervisor 编排
         //    长期记忆的归属键：优先用前端持久化的 visitorId（跨会话共享偏好），退化用 sessionId
         String memoryKey = (request.getVisitorId() != null && !request.getVisitorId().isBlank())
                 ? request.getVisitorId() : sessionId;
-        AgentLoop.Result result = agentLoop.run(sessionId, memoryKey, request.getMessage());
+        AgentLoop.Result result = multiAgentOrchestrator.isEnabled()
+                ? multiAgentOrchestrator.orchestrate(sessionId, memoryKey, request.getMessage())
+                : agentLoop.run(sessionId, memoryKey, request.getMessage());
         log.info("Agent 执行完成：{} 步、{} 次工具调用、收敛={}、终止原因={}",
                 result.stepCount(), result.toolCallCount(), result.converged(), result.stopReason());
 
