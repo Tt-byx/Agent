@@ -10,9 +10,8 @@ spring:
   # 本地私有配置（密钥等），不进版本库；文件不存在也不影响启动
   config:
     import:
-      - optional:classpath:application-local.yml
-      # 项目根目录的 .env（已被 gitignore）。两个相对路径都试，
-      # 兼容 `mvn spring-boot:run`（cwd=backend-java）与 `java -jar`（cwd=backend-java）
+      # 密钥与本地私有配置统一放项目根目录 .env（已被 gitignore）。
+      # 两个相对路径都试，兼容 `mvn spring-boot:run`（cwd=backend-java）与从仓库根启动
       - optional:file:./.env[.properties]
       - optional:file:../.env[.properties]
   datasource:
