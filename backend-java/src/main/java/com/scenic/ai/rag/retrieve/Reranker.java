@@ -36,17 +36,20 @@ public class Reranker {
     private final String apiKey;
     private final String modelName;
     private final long timeoutSeconds;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     public Reranker(@Value("${rerank.enabled:true}") boolean enabled,
                     @Value("${rerank.base-url:https://api.siliconflow.cn/v1}") String baseUrl,
                     @Value("${rerank.api-key:}") String apiKey,
                     @Value("${rerank.model-name:BAAI/bge-reranker-v2-m3}") String modelName,
-                    @Value("${rerank.timeout-seconds:30}") long timeoutSeconds) {
+                    @Value("${rerank.timeout-seconds:30}") long timeoutSeconds,
+                    io.micrometer.core.instrument.MeterRegistry meterRegistry) {
         this.enabled = enabled;
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.timeoutSeconds = timeoutSeconds;
+        this.meterRegistry = meterRegistry;
     }
 
     public boolean isAvailable() {
@@ -96,10 +99,14 @@ public class Reranker {
                         item.path("relevance_score").asDouble(0.0)));
             }
             ranked.sort((a, b) -> Double.compare(b.relevanceScore(), a.relevanceScore()));
+            meterRegistry.counter("scenic.rerank.calls", "result", "success").increment();
             log.info("Rerank 完成：{} 条候选，模型 {}", ranked.size(), modelName);
             return ranked;
 
         } catch (Exception e) {
+            // A5 · 失败埋点：重排长期静默失效会导致检索质量悄悄退化到「混合」档，
+            // 没有指标就只能靠评测才发觉。命中率在 Grafana 面板上应接近 100%。
+            meterRegistry.counter("scenic.rerank.calls", "result", "failure").increment();
             log.warn("Rerank 调用失败，回退到融合结果: {}", e.getMessage());
             return List.of();
         }

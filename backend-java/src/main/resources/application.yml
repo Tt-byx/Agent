@@ -16,8 +16,9 @@ spring:
       - optional:file:../.env[.properties]
   datasource:
     url: jdbc:mysql://localhost:3306/scenic_ai?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: 123456
+    username: ${SCENIC_MYSQL_USERNAME:root}
+    # D2 · 密码不硬编码：默认仅为本机演示值，公开仓库前在 .env 里设 SCENIC_MYSQL_PASSWORD
+    password: ${SCENIC_MYSQL_PASSWORD:123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
   servlet:
     multipart:
@@ -37,9 +38,7 @@ mybatis-plus:
       id-type: auto
 
 # Python 后端地址（P2 后对话链路已不再依赖它；知识库处理与健康检查随 P3 迁移后移除）
-python:
-  backend:
-    url: http://localhost:9000
+# （A2 · 2026-09-28）原 python.backend 配置已随 Python 后端退役删除
 
 # 大模型配置（OpenAI 兼容：DeepSeek / MiMo / 百炼 均可直接替换 base-url 与 model）
 # 注意：密钥不要写在本文件（仓库公开）。放项目根目录 .env 或设环境变量。

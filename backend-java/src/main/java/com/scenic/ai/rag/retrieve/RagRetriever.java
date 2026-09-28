@@ -30,18 +30,15 @@ public class RagRetriever {
     private final EmbeddingModel embeddingModel;
 
     private final int topK;
-    private final int maxContextChars;
     private final double minScore;
 
     public RagRetriever(ObjectProvider<EmbeddingStore<TextSegment>> storeProvider,
                         EmbeddingModel embeddingModel,
                         @Value("${rag.top-k:5}") int topK,
-                        @Value("${rag.max-context-chars:1500}") int maxContextChars,
                         @Value("${rag.min-score:0.3}") double minScore) {
         this.storeProvider = storeProvider;
         this.embeddingModel = embeddingModel;
         this.topK = topK;
-        this.maxContextChars = maxContextChars;
         this.minScore = minScore;
     }
 
@@ -91,34 +88,5 @@ public class RagRetriever {
             log.warn("知识库检索失败，将使用无上下文模式: {}", e.getMessage());
             return List.of();
         }
-    }
-
-    /**
-     * 组装注入到系统提示词里的上下文文本，格式与 Python 侧保持一致：
-     * {@code 【参考资料N】(来源: 文档名)\n正文}
-     */
-    public String retrieveContext(String query) {
-        List<RetrievedChunk> chunks = retrieve(query);
-        if (chunks.isEmpty()) {
-            return "";
-        }
-
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < chunks.size(); i++) {
-            if (sb.length() > 0) {
-                sb.append("\n\n");
-            }
-            RetrievedChunk chunk = chunks.get(i);
-            sb.append("【参考资料").append(i + 1).append("】(来源: ")
-                    .append(chunk.docTitle()).append(")\n")
-                    .append(chunk.text());
-        }
-
-        String context = sb.toString();
-        if (context.length() > maxContextChars) {
-            context = context.substring(0, maxContextChars) + "...";
-            log.info("上下文超过 {} 字，已截断", maxContextChars);
-        }
-        return context;
     }
 }

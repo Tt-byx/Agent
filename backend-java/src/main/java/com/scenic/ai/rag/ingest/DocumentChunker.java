@@ -9,10 +9,12 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * 文档切分器 —— 从 {@code backend-python/app/services/text_chunker.py} 逐项搬迁。
+ * 文档切分器 —— 自 Python 版 {@code text_chunker.py} 演进而来。
  *
- * 策略与原实现一致：
- *   先按空行分段 → 超长段落按句子切 → 超长句子按字数硬切 → 相邻 chunk 之间加尾巴重叠。
+ * 策略：
+ *   先按空行分段 → 超长段落按句子切 → 超长句子按字数硬切
+ *   → **相邻短段合并**（A3：避免标题/表格行各自成碎片，实测把平均片长从 50 字拉到 300+ 字）
+ *   → 相邻 chunk 之间加尾巴重叠。
  */
 @Component
 @Slf4j
@@ -66,6 +68,30 @@ public class DocumentChunker {
             }
             splitOversizedParagraph(para, rawChunks);
         }
+
+        // A3 · 合并相邻短段：纯段落切分会把标题、表格行这类短段落切成碎片
+        // （实测 6020 字切出 120 片、平均 50 字），严重拉低检索信噪比。
+        // 策略：相邻段落拼接，直到接近 chunkSize 才断开；合并后仍保证每片 ≤ chunkSize。
+        List<String> merged = new ArrayList<>(rawChunks.size());
+        StringBuilder buf = new StringBuilder();
+        for (String piece : rawChunks) {
+            if (buf.length() > 0 && buf.length() + piece.length() + 1 > chunkSize) {
+                merged.add(buf.toString());
+                buf.setLength(0);
+            }
+            if (buf.length() > 0) {
+                buf.append('\n');
+            }
+            buf.append(piece);
+            if (buf.length() >= chunkSize) {
+                merged.add(buf.toString());
+                buf.setLength(0);
+            }
+        }
+        if (buf.length() > 0) {
+            merged.add(buf.toString());
+        }
+        rawChunks = merged;
 
         // 加相邻重叠（除第一个 chunk 外，前面拼上一块的尾部）
         List<Chunk> result = new ArrayList<>(rawChunks.size());

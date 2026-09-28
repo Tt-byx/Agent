@@ -1,21 +1,26 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.dto.Result;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.entity.VisitorProfileTag;
 import com.scenic.ai.mapper.*;
-import com.scenic.ai.util.SentimentAnalyzer;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 管理后台的运营 AI 助手（运营侧，与游客对话链路相互独立）。
+ *
+ * A2 · Python 退场后改为 JVM 内直调 AgentLoop：原来的实现只是
+ * 「Java 拼上下文 → RestTemplate 转发 Python → Python 调一次 LLM」，
+ * 迁移后省掉一跳网络，并复用主循环的超时 / 降级 / token 统计。
+ */
 @RestController
 @RequestMapping("/api/admin-ai")
 public class AdminAIController {
@@ -38,12 +43,9 @@ public class AdminAIController {
     private UserMapper userMapper;
 
     @Autowired
-    private RestTemplate restTemplate;
+    private AgentLoop agentLoop;
 
-    @Value("${python.backend.url}")
-    private String pythonBackendUrl;
-
-    /** 运营人员 AI 问答：组装行为数据上下文后转发给 Python */
+    /** 运营人员 AI 问答：组装行为数据上下文后交给 Agent */
     @PostMapping("/chat")
     public Result<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
         String message = body.getOrDefault("message", "");
@@ -52,21 +54,16 @@ public class AdminAIController {
         }
 
         try {
-            // 构建行为数据上下文
             String behaviorContext = buildBehaviorContext();
+            String prompt = "你是景区运营数据分析师。下面是游客行为数据的统计摘要：\n"
+                    + behaviorContext
+                    + "\n\n运营人员的问题：" + message
+                    + "\n\n请基于以上数据回答，用纯文本口语化中文，结论要落到可执行的运营动作上。";
 
-            // 调用 Python 端 AI 问答
-            Map<String, Object> request = new HashMap<>();
-            request.put("message", message);
-            request.put("behavior_context", behaviorContext);
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = restTemplate.postForObject(
-                    pythonBackendUrl + "/api/admin-ai/chat",
-                    request, Map.class);
+            AgentLoop.Result r = agentLoop.run("admin-chat", "admin-chat", prompt);
 
             Map<String, Object> result = new HashMap<>();
-            result.put("reply", response != null ? response.getOrDefault("reply", "暂无回答") : "AI服务无响应");
+            result.put("reply", r.answer());
             return Result.success(result);
         } catch (Exception e) {
             log.error("AI问答失败: {}", e.getMessage());
@@ -95,21 +92,19 @@ public class AdminAIController {
             // 查询对话情感分布
             Map<String, String> profile = buildUserProfile(userId);
 
-            // 调用 Python 端推荐
-            Map<String, Object> request = new HashMap<>();
-            request.put("nickname", profile.getOrDefault("nickname", "游客"));
-            request.put("profile_tags", tagNames);
-            request.put("sentiment_summary", profile.getOrDefault("sentiment", "中性"));
-            request.put("consumption_summary", profile.getOrDefault("consumption", "暂无消费记录"));
-            request.put("conversation_snippet", profile.getOrDefault("snippet", ""));
+            String prompt = "你是景区营销顾问。以下是某位游客的画像：\n"
+                    + "昵称：" + profile.getOrDefault("nickname", "游客") + "\n"
+                    + "兴趣标签：" + (tagNames.isEmpty() ? "暂无" : String.join("、", tagNames)) + "\n"
+                    + "情感倾向：" + profile.getOrDefault("sentiment", "中性") + "\n"
+                    + "消费概况：" + profile.getOrDefault("consumption", "暂无消费记录") + "\n"
+                    + "最近对话片段：" + profile.getOrDefault("snippet", "无") + "\n\n"
+                    + "请基于该画像给出 3-5 条个性化营销或服务建议（推荐景点、活动、优惠等），"
+                    + "纯文本，每条一行，不要编号符号。";
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> response = restTemplate.postForObject(
-                    pythonBackendUrl + "/api/admin-ai/recommend",
-                    request, Map.class);
+            AgentLoop.Result r = agentLoop.run("admin-recommend-" + userId, "admin-recommend-" + userId, prompt);
 
             Map<String, Object> result = new HashMap<>();
-            result.put("suggestions", response != null ? response.getOrDefault("suggestions", "暂无推荐") : "服务无响应");
+            result.put("suggestions", r.answer());
             return Result.success(result);
         } catch (Exception e) {
             log.error("推荐生成失败: {}", e.getMessage());
