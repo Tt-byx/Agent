@@ -1,106 +1,140 @@
-# 景区导览 AI 数字人系统
+# 景区智能导览 Agent 系统
 
-> 第十五届中国软件杯 A组赛题 | 出题方：锐捷网络
+> 第十六届中国软件杯 A 组赛题（景区导览服务 AI 数字人）的 **Agent 化改造**：AI 主链路从 Python 迁移至 JVM，基于 LangChain4j 实现可自纠、可观测、有成本意识的 ReAct Agent。
 
-一个基于大模型的景区导览 AI 数字人系统，游客通过语音或文字与数字人对话，获取景区介绍、路线推荐等服务。
-
----
-
-## 系统功能
-
-**游客端**
-- 数字人形象展示（2D半身像，口型同步+表情变化）
-- 语音/文字双通道提问
-- 基于景区知识库的精准问答（RAG，准确率 ≥ 90%）
-- 根据兴趣偏好推荐游览路线
-
-**管理后台**
-- 知识库文档管理（PDF/Word/文本上传，自动向量化）
-- 数字人形象与声音配置
-- 游客对话记录与反馈分析
-- 数据大屏（服务人次、热门问答、满意度趋势）
+**一句话定位**：不是"会动的数字人 + 问答机器人"，而是一个带三层记忆、故障能自纠、行为可评测、成本可度量的景区导览 Agent 内核。
 
 ---
+
+## 核心结果
+
+| 维度 | 结果 |
+|---|---|
+| 检索质量（自建 33 条评测集） | Hit@1 **54.5% → 90.9%**，MRR **0.674 → 0.934**（向量 + BM25 混合检索 + 重排） |
+| Agent 可靠性 | 自研 ReAct 循环，5 项验收全过；注入必失败工具后**自行换参数重试**再优雅降级，全程无 500 |
+| 性能 | 语义缓存命中后 **P50 3274ms → 201ms**，**QPS 2.5 → 23.1（约 9 倍）**，命中路径不调用模型（边际成本 0） |
+| 记忆 | 三层记忆（Redis 滑窗 / 会话摘要 / pgvector 长期偏好），实测**跨会话召回用户偏好** |
+| 高可用 | 跨厂商主备模型路由（主模型故障自动切换、用户零感知）+ Redis 限流 |
+| 可观测 | Micrometer / Prometheus 指标（路由健康 / 缓存命中 / 工具失败 / token 成本）+ Grafana 面板 |
+
+## 与常见方案的差异
+
+- **同一份工具逻辑，两条通道复用**：`@Tool` 注解的业务方法既注册给模型（Function Calling），又通过 **MCP Server**（Streamable HTTP）暴露给外部客户端（Cherry Studio / Claude Desktop），解决工具接入的 M × N 重复对接。
+- **自研循环而非框架黑盒**：AiServices 的内嵌工具循环不暴露最大步数、整体超时、逐步 trace 三个旋钮，而这正是可靠性需求所在。自研用 `ChatModel + ToolSpecifications + DefaultToolExecutor` 组装，工具声明仍复用 `@Tool`，无重复定义。
+- **评测驱动**：每阶段以量化指标验收并跑回归；发现原定指标（Recall@5 +10pp）在 90.9% 基线上数学上不可达后，改用 Hit@1 / MRR——指标选型本身经过论证。
+- **分工是物理的**：多 Agent 编排下，每个专家只持有白名单内的工具（子工具箱裁剪），而非提示词约定；专家工具箱不含委派工具，从结构上杜绝无限递归。
+
+## 系统架构
+
+```
+            ┌─────────────────────────── JVM（Spring Boot 3）───────────────────────────┐
+  Vue3 前端 │  Controller/WS → AgentLoop（ReAct 循环）                                   │
+  ────────► │                     │                                                     │
+  MCP 客户端│  MCP Server ────────┤  AgentToolbox（@Tool 反射生成 schema / 异常回灌 / 子工具箱） │
+  ────────► │  (Streamable HTTP)  │        │                                            │
+            │  Supervisor 编排 ───┘        ▼                                            │
+            │                     混合检索（pgvector + BM25）→ Reranker                   │
+            │  RoutedChatModel（主/备跨厂商降级）      SemanticCache（pgvector）          │
+            │        │                                  │                               │
+            └────────┼──────────────────────────────────┼───────────────────────────────┘
+                     ▼                                  ▼
+        DeepSeek 官方 / 硅基流动（OpenAI 兼容）   PostgreSQL + pgvector   Redis   MySQL
+```
+
+- 一次对话的完整路径：语义缓存查 → 记忆召回（长期偏好 + 会话上下文）→ ReAct 循环（按需检索 / 调工具）→ 强制收口 → 回写记忆与缓存，全程 Micrometer 打点。
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 前端 | Vue 3 + Element Plus + ECharts |
-| Java 后端 | Spring Boot + MyBatis-Plus + MySQL |
-| Python 后端 | FastAPI |
-| 向量数据库 | ChromaDB |
-| 大模型 | 通义千问（Qwen）/ 智谱 GLM API |
-| 语音识别 | FunASR（阿里开源） |
-| 语音合成 | CosyVoice（阿里开源） |
-| 数字人驱动 | SadTalker / MuseTalk |
-| 部署 | Docker + Docker Compose |
-
----
-
-## 系统架构
-
-```
-游客端(Vue3)  ←HTTP/WS→  Java后端(Spring Boot)  ←HTTP→  Python后端(FastAPI)
-                                ↕                              ↕
-                              MySQL                      ChromaDB / 大模型API
-                                                    FunASR / CosyVoice / SadTalker
-```
-
-- **Java后端** 是面向前端的唯一入口，管理所有业务数据
-- **Python后端** 只负责AI能力（RAG、ASR、TTS、数字人驱动）
-- **前端** 通过 WebSocket 与 Java 后端保持实时对话通道
-
----
-
-## 项目结构
-
-```
-Scenic_Area_Services/
-├── frontend/          # Vue 3 前端项目（游客端 + 管理后台）
-├── backend-java/      # Spring Boot 后端（业务网关）
-├── backend-python/    # FastAPI 后端（AI 能力服务）
-├── docker/            # Docker 配置文件
-├── doc/               # 项目文档（问答记录、设计文档等）
-├── git-init.ps1       # Git 仓库一键初始化脚本
-├── .gitignore         # Git 忽略规则
-├── README.md          # 项目说明（本文件）
-└── CLAUDE.md          # AI 辅助开发总控文档
-```
-
----
+| Agent 内核 | LangChain4j 1.20（自研 ReAct 循环 + Supervisor 编排） |
+| 后端 | Spring Boot 3.3、MyBatis-Plus、WebSocket |
+| 工具协议 | MCP Java SDK 2.0（`mcp-core` + `mcp-json-jackson2`，Streamable HTTP） |
+| 检索 | PostgreSQL **pgvector**（向量）+ 自研 BM25（JVM 内）+ bge-reranker-v2-m3 重排 |
+| 记忆/缓存 | Redis（滑窗 + 摘要）、pgvector（长期偏好 + 语义缓存） |
+| 模型 | DeepSeek（主）/ 硅基流动（备），OpenAI 兼容协议 |
+| 观测 | Micrometer + Prometheus + Grafana（面板：`backend-java/docs/`） |
 
 ## 快速开始
 
+依赖：JDK 17、Maven 3.9、MySQL 8、Redis 7、PostgreSQL 16+（含 pgvector 扩展）。
+
 ```bash
-# 克隆仓库
-git clone https://github.com/Tt-byx/Scenic_Area_Services.git
-cd Scenic_Area_Services
+# 1. 配置密钥（不要提交到仓库）
+#    方式一：环境变量 SCENIC_LLM_API_KEY / SCENIC_EMBEDDING_API_KEY
+#    方式二：新建 backend-java/src/main/resources/application-local.yml（已被 .gitignore 忽略）
+#            llm:
+#              api-key: sk-xxx
+#            embedding:
+#              api-key: sk-xxx
 
-# 启动各服务（详见各子目录 README）
-# 前端
+# 2. 启动后端（默认端口 10086）
+cd backend-java
+mvn spring-boot:run
+
+# 3. 前端
 cd frontend && npm install && npm run dev
-
-# Java 后端
-cd backend-java && mvn spring-boot:run
-
-# Python 后端
-cd backend-python && pip install -r requirements.txt && uvicorn main:app --reload
 ```
 
----
+可选开关（命令行参数）：
 
-## 开发路线图
+| 参数 | 说明 |
+|---|---|
+| `--agent.multi.enabled=true` | 启用 Supervisor 多 Agent 编排（默认单 Agent，延迟更低） |
+| `--agent.debug-tools.enabled=true` | 注册故障注入工具，演示工具失败后的自纠 |
+| `--gateway.rate-limit.per-minute=20` | 每游客限流阈值 |
+| `--llm.api-key=invalid` | 故意破坏主模型，验证跨厂商降级 |
 
-- [x] Phase 0：项目骨架搭建与文字对话全链路跑通
-- [ ] Phase 1：RAG 知识库构建（准确率 ≥ 90%）
-- [ ] Phase 2：语音交互链路（延迟 < 5秒）
-- [ ] Phase 3：数字人口型同步与表情变化
-- [ ] Phase 4：个性化路线推荐
-- [ ] Phase 5：管理后台完善与数据大屏
-- [ ] Phase 6：联调打磨与交付
+**MCP 接入**：在 Cherry Studio / Claude Desktop 中添加 Streamable HTTP 服务器，URL 填 `http://localhost:10086/mcp`，可发现并调用 3 个景区工具。
 
----
+## 目录结构
+
+```
+├── backend-java/        # Spring Boot 后端：Agent 内核 + RAG + MCP Server + 网关（核心）
+│   └── docs/            # Grafana 面板等工程交付物
+├── langgraph-demo/      # Python LangGraph 对照 demo（复刻同一 ReAct 循环，不接主链路）
+├── backend-python/      # 旧 Python 后端（已不被主链路依赖，仅存档）
+├── frontend/            # Vue 3 前端（游客端 + 管理后台）
+└── docs/                # 本地资料（改造方案、评测记录、答辩材料；不入库）
+```
+
+## 评测与压测
+
+**检索质量**（33 条评测集，三种检索模式对比）：
+
+| 指标 | 纯向量 | 混合 | 混合+重排 |
+|---|---|---|---|
+| Recall@5 | 0.909 | 0.909 | **0.970** |
+| Hit@1 | 0.545 | 0.636 | **0.909** |
+| MRR | 0.674 | 0.736 | **0.934** |
+
+**压测**（自研负载脚本，指标口径与 JMeter 一致）：
+
+| 场景 | 并发 | 成功率 | QPS | P50 | P95 |
+|---|---|---|---|---|---|
+| 缓存命中路径 | 8 | 85% | **23.1** | **201 ms** | 664 ms |
+| 完整链路（检索+工具+模型） | 5 | 100% | 2.5 | 3274 ms | 3994 ms |
+
+完整链路成本 ≈ 2400 输入 + 134 输出 token/次；缓存命中路径为 0。
+
+## 已知局限
+
+- 评测集 33 条为小样本，结论是方向性的；计划扩到 100+ 并加入对抗样本（相似问题不同答案）。
+- 语义缓存对超短查询存在误命中风险（相似度 > 0.92），计划对短查询提高阈值。
+- 缓存命中路径仍依赖一次 embedding 调用，压测下瓶颈在外部 embedding 接口并发；计划加查询向量本地缓存。
+- 生成答案暂无引用溯源（不标注出自哪个切片），是可解释性的下一步。
+
+## 开发路线
+
+- [x] 架构收敛：删除数字人/语音链路，AI 主链路迁至 JVM（P1–P2）
+- [x] RAG 迁移与重建：pgvector + JVM 内文档处理（P3）
+- [x] 检索评测体系与优化：Hit@1 54.5%→90.9%（P4）
+- [x] 工具体系：7 个工具 + 并行调用（P5）
+- [x] MCP Server：Streamable HTTP + 协议验证（P6）
+- [x] 自研 ReAct 循环与可靠性机制（P7）
+- [x] 三层记忆 / 语义缓存 / 多模型路由 / 限流 / 压测 / 监控（P8）
+- [x] Supervisor 多 Agent + LangGraph 对照（P9）
+- [ ] 答案引用溯源；评测集扩充；查询向量本地缓存
 
 ## 团队
 
@@ -108,6 +142,4 @@ cd backend-python && pip install -r requirements.txt && uvicorn main:app --reloa
 
 ---
 
-## License
-
-本项目仅供比赛使用。
+本项目基于中国软件杯赛题开发，仅供学习与比赛使用。
