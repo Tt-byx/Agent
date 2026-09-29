@@ -1,11 +1,15 @@
 package com.scenic.ai.gateway;
 
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -54,7 +58,10 @@ public class RoutedChatModel implements ChatModel {
         Exception lastFailure = null;
         boolean anyCandidateAttempted = false;
 
-        for (Route route : routes) {
+        // Wave 6 · 语义路由：按请求复杂度决定候选顺序。
+        // 简单问题让快模型先答（省钱、低延迟）；复杂问题把强模型提到前面（保质量）。
+        // 判定放在路由层，AgentLoop 无需感知 —— 它只知道"我调用了一个 ChatModel"。
+        for (Route route : orderByComplexity(request)) {
             // 熔断打开（或半开状态下未取得许可）→ 直接跳过，不再白打一次
             if (!route.circuitBreaker().tryAcquirePermission()) {
                 log.warn("[ROUTE] {} 处于熔断状态，本次请求直接跳过", route.name());
@@ -126,5 +133,89 @@ public class RoutedChatModel implements ChatModel {
     @Override
     public ChatResponse doChat(ChatRequest request) {
         return chat(request);
+    }
+
+    // ───────────────────────── Wave 6 · 语义路由 ─────────────────────────
+
+    /**
+     * 复杂意图标记：出现这类词说明需要综合多步信息（对比、规划、分析），
+     * 值得优先用更强的模型。
+     */
+    private static final List<String> COMPLEX_MARKERS = List.of(
+            "分析", "对比", "规划", "安排", "为什么", "总结", "推荐路线",
+            "怎么选", "区别", "分别", "综合", "方案", "预算", "几天", "行程");
+
+    /**
+     * 按复杂度排序候选：复杂请求把强模型提到最前，其余保持配置顺序（快模型优先）。
+     *
+     * 强模型的识别用**命名约定**（候选名含 "pro"）—— 这样不必改动 Route 结构，
+     * 代价是依赖命名；而项目里主备名是稳定的（primary:deepseek-flash / fallback:deepseek-v4-pro）。
+     */
+    private List<Route> orderByComplexity(ChatRequest request) {
+        if (routes.size() < 2) {
+            return routes;
+        }
+        boolean complex = isComplex(request);
+        metrics.routeDecision(complex);
+        if (!complex) {
+            return routes;
+        }
+        List<Route> ordered = new ArrayList<>(routes);
+        ordered.sort((a, b) -> Boolean.compare(isStrong(b), isStrong(a)));
+        log.info("[ROUTE] 请求判为复杂，候选顺序调整为：{}",
+                ordered.stream().map(Route::name).toList());
+        return ordered;
+    }
+
+    /**
+     * 复杂度启发式（零额外成本，不引入分类模型）：
+     *   - 上下文很长（多轮对话累积）→ 复杂
+     *   - 最新一句用户输入含「分析/对比/规划/安排」等需要综合的意图 → 复杂
+     *
+     * 取舍说明：真正的语义分类器需要**多一次模型调用**才能判断该用哪个模型，
+     * 那次调用的成本与延迟往往超过分流带来的收益 —— 启发式在这里"够用就好"。
+     */
+    private boolean isComplex(ChatRequest request) {
+        if (request == null || request.messages() == null) {
+            return false;
+        }
+        List<ChatMessage> messages = request.messages();
+        if (messages.size() > 8) {
+            return true;
+        }
+        int totalChars = 0;
+        String lastUserText = "";
+        for (ChatMessage message : messages) {
+            String text = textOf(message);
+            totalChars += text.length();
+            if (message instanceof UserMessage) {
+                lastUserText = text;
+            }
+        }
+        if (totalChars > 2000) {
+            return true;
+        }
+        for (String marker : COMPLEX_MARKERS) {
+            if (lastUserText.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String textOf(ChatMessage message) {
+        if (message instanceof UserMessage user) {
+            String text = user.singleText();
+            return text == null ? "" : text;
+        }
+        if (message instanceof AiMessage ai) {
+            String text = ai.text();
+            return text == null ? "" : text;
+        }
+        return "";
+    }
+
+    private boolean isStrong(Route route) {
+        return route.name() != null && route.name().toLowerCase().contains("pro");
     }
 }

@@ -140,6 +140,14 @@ public class AgentMetrics {
                 .record(durationMillis, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Wave 6 · 语义路由决策：本次请求被判为「简单（走快模型）」还是「复杂（优先强模型）」。
+     * 用于验证按复杂度分流是否真的生效、成本结构是否随之变化。
+     */
+    public void routeDecision(boolean complex) {
+        registry.counter("scenic.route.decision", "tier", complex ? "strong" : "fast").increment();
+    }
+
     /** Wave 3 · 限流拒绝量（dimension = visitor / ip） */
     public void rateLimitRejected(String dimension) {
         registry.counter("scenic.rate_limit.rejected", "dimension", safeTag(dimension)).increment();

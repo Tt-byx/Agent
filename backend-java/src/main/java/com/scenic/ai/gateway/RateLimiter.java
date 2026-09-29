@@ -52,20 +52,35 @@ public class RateLimiter {
      * @return true = 放行，false = 超出配额
      */
     public boolean allow(String key, String dimension) {
+        return allow(key, dimension, limitPerMinute);
+    }
+
+    /**
+     * Wave 6 · 指定额度的限流。
+     *
+     * 为什么需要：对接外部客户端的 MCP 端点有自己的流量特征（一次会话可能连续调多个工具），
+     * 不能和对话入口共用「20 次/分钟」这种面向游客的额度。
+     *
+     * @param key       限流维度标识（visitorId / IP / MCP 客户端标识）
+     * @param dimension 维度类型，仅用于指标标签：visitor / ip / mcp
+     * @param limit     该维度每分钟允许的次数
+     */
+    public boolean allow(String key, String dimension, int limit) {
         if (!enabled || key == null || key.isBlank()) {
             return true;
         }
+        int effectiveLimit = Math.max(1, limit);
         try {
             String bucket = "rate:" + key + ":" + (System.currentTimeMillis() / WINDOW_MILLIS);
             Long count = redis.opsForValue().increment(bucket);
             if (count != null && count == 1L) {
                 redis.expire(bucket, Duration.ofMillis(WINDOW_MILLIS * 2));
             }
-            boolean allowed = count != null && count <= limitPerMinute;
+            boolean allowed = count != null && count <= effectiveLimit;
             if (!allowed) {
                 metrics.rateLimitRejected(dimension);
                 log.warn("[RATE] 已限流：{}={}，本分钟第 {} 次（上限 {}）",
-                        dimension, key, count, limitPerMinute);
+                        dimension, key, count, effectiveLimit);
             }
             return allowed;
         } catch (Exception e) {

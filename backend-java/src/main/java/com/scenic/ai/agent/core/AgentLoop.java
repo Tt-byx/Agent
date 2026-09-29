@@ -68,6 +68,8 @@ public class AgentLoop {
     private final int maxSteps;
     private final long timeoutSeconds;
     private final int maxToolsPerStep;
+    /** Wave 6 · 系统提示词的字符预算（超出则按优先级收敛短期滑窗） */
+    private final int maxContextChars;
     /** Wave 5 · 流式路径专用（SSE）；同步路径仍用 chatModel */
     private final StreamingChatModel streamingChatModel;
 
@@ -81,6 +83,7 @@ public class AgentLoop {
                      @Value("${agent.max-steps:6}") int maxSteps,
                      @Value("${agent.timeout-seconds:120}") long timeoutSeconds,
                      @Value("${agent.max-tools-per-step:4}") int maxToolsPerStep,
+                     @Value("${agent.context.max-chars:6000}") int maxContextChars,
                      @Value("${agent.system-prompt:prompts/scenic-agent-system.txt}") String systemPromptPath)
             throws IOException {
         this.chatModel = chatModel;
@@ -94,6 +97,8 @@ public class AgentLoop {
         this.timeoutSeconds = timeoutSeconds;
         // Wave 1 · 单步工具上限：模型一次返回过多工具调用会放大延迟与成本
         this.maxToolsPerStep = Math.max(1, maxToolsPerStep);
+        // Wave 6 · 上下文预算：至少留 1000 字，否则连人设都放不下
+        this.maxContextChars = Math.max(1000, maxContextChars);
         this.baseSystemPrompt = new ClassPathResource(systemPromptPath)
                 .getContentAsString(StandardCharsets.UTF_8);
         log.info("AgentLoop 就绪：最大步数 {}，整体超时 {}s，单步工具上限 {}，工具 {} 个",
@@ -131,7 +136,7 @@ public class AgentLoop {
 
         // ===== P8：组装带记忆的系统提示词 =====
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(buildSystemMessage(systemPrompt, memoryKey, userMessage)));
+        messages.add(SystemMessage.from(buildSystemMessage(systemPrompt, sessionId, memoryKey, userMessage)));
         messages.add(UserMessage.from(userMessage));
 
         List<Step> trace = new ArrayList<>();
@@ -277,7 +282,7 @@ public class AgentLoop {
         }
         metrics.cacheMiss();
 
-        String systemMessage = buildSystemMessage(baseSystemPrompt, memoryKey, question);
+        String systemMessage = buildSystemMessage(baseSystemPrompt, sessionId, memoryKey, question);
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(systemMessage));
         messages.add(UserMessage.from(question));
@@ -420,10 +425,23 @@ public class AgentLoop {
      * 组装带记忆的系统提示词：
      * 基础人设与规则 + 长期偏好（跨会话）+ 短期摘要与本轮上下文（会话内）。
      */
-    private String buildSystemMessage(String basePrompt, String memoryKey, String query) {
+    /**
+     * 组装带记忆的系统提示词。
+     *
+     * 优先级：基础人设（必留）→ 长期偏好（跨会话，按 memoryKey）→ 会话摘要 → 最近若干轮（按 sessionId）。
+     *
+     * Wave 6 修正两处：
+     *   ① **短期记忆与摘要改按 sessionId 读写**。原先这里用 memoryKey 读取，而
+     *      {@link #rememberTurn} 是按 sessionId 写入的 —— 只要两者不同
+     *      （登录用户的 memoryKey 是 {@code user:{id}}，必然不等于会话 ID），
+     *      短期记忆就永远读不到、形同虚设。
+     *   ② **按 token 预算动态收敛滑窗**：固定部分（人设 + 偏好 + 摘要）先占位，
+     *      剩余预算决定还能带几轮对话，避免长会话把上下文撑爆。
+     */
+    private String buildSystemMessage(String basePrompt, String sessionId, String memoryKey, String query) {
         StringBuilder sb = new StringBuilder(basePrompt);
 
-        // 长期偏好（跨会话）
+        // 1) 长期偏好（跨会话共享，按 memoryKey）
         List<String> preferences = longTermMemory.recall(memoryKey, query);
         metrics.memoryRecalled(preferences.size());
         if (!preferences.isEmpty()) {
@@ -433,15 +451,27 @@ public class AgentLoop {
             }
         }
 
-        // 会话摘要 + 短期滑窗（会话内）
-        String summary = shortTermMemory.summary(memoryKey);
-        List<ShortTermMemory.Turn> recent = shortTermMemory.recent(memoryKey);
+        // 2) 会话摘要与短期滑窗（会话内上下文，按 sessionId）
+        String summary = shortTermMemory.summary(sessionId);
+        List<ShortTermMemory.Turn> recent = shortTermMemory.recent(sessionId);
+
         if (summary != null && !summary.isBlank()) {
             sb.append("\n\n【本会话此前内容的摘要】\n").append(summary).append('\n');
         }
+
         if (!recent.isEmpty()) {
+            // Wave 6 · token 预算：每条最多 200 字（见 abbreviate），据此算出剩余预算能放几条
+            int remainingChars = Math.max(0, maxContextChars - sb.length());
+            int maxMessages = Math.max(2, remainingChars / 200);
+            int fromIndex = Math.max(0, recent.size() - maxMessages);
+            List<ShortTermMemory.Turn> window = recent.subList(fromIndex, recent.size());
+            if (fromIndex > 0) {
+                metrics.degrade("context_trim");
+                log.info("上下文预算 {} 字：短期滑窗由 {} 条收敛为最近 {} 条",
+                        maxContextChars, recent.size(), window.size());
+            }
             sb.append("\n\n【本会话最近几轮对话】\n");
-            for (ShortTermMemory.Turn turn : recent) {
+            for (ShortTermMemory.Turn turn : window) {
                 sb.append(turn.role().equals("user") ? "游客: " : "导游: ")
                         .append(abbreviate(turn.content(), 200)).append('\n');
             }

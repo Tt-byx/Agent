@@ -1,0 +1,102 @@
+# Wave 6 · 一键起环境（替代此前的手工 docker run）
+#
+# 用法：
+#   只起中间件（推荐开发时用，应用在宿主机跑 mvn spring-boot:run）：
+#       docker compose up -d mysql pgvector redis
+#   连应用一起起（需要先 mvn package 或让 compose 构建）：
+#       docker compose --profile full up -d
+#
+# 与 application.yml 的对应关系：
+#   MySQL      localhost:3306  scenic_ai        root/<SCENIC_MYSQL_PASSWORD|123456>
+#   pgvector   localhost:5432  scenic_vectors   postgres/<SCENIC_PG_PASSWORD|postgres>
+#   Redis      localhost:6379
+#
+# 密码通过环境变量覆盖，默认值仅供本机开发。
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: scenic-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SCENIC_MYSQL_PASSWORD:-123456}
+      MYSQL_DATABASE: scenic_ai
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - scenic-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${SCENIC_MYSQL_PASSWORD:-123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  pgvector:
+    # 自带 pgvector 扩展的官方镜像（知识库向量、长期记忆、语义缓存三张表都在这里）
+    image: pgvector/pgvector:pg17
+    container_name: scenic-pgvector
+    environment:
+      POSTGRES_DB: scenic_vectors
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SCENIC_PG_PASSWORD:-postgres}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - scenic-pgvector-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d scenic_vectors"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    # 三层记忆（滑窗/摘要）、语义缓存计数、限流、幂等都依赖它
+    image: redis:7-alpine
+    container_name: scenic-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - scenic-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    # 仅在 --profile full 时启动；密钥需通过环境变量传入（不要写进 compose 文件）
+    profiles: ["full"]
+    build:
+      context: ./backend-java
+      dockerfile: Dockerfile
+    container_name: scenic-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      pgvector:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SCENIC_MYSQL_PASSWORD: ${SCENIC_MYSQL_PASSWORD:-123456}
+      SCENIC_PG_PASSWORD: ${SCENIC_PG_PASSWORD:-postgres}
+      SCENIC_LLM_API_KEY: ${SCENIC_LLM_API_KEY:?请在环境变量里提供大模型密钥}
+      SCENIC_EMBEDDING_API_KEY: ${SCENIC_EMBEDDING_API_KEY:-}
+      SCENIC_RERANK_API_KEY: ${SCENIC_RERANK_API_KEY:-}
+      SCENIC_JWT_SECRET: ${SCENIC_JWT_SECRET:?请提供至少 32 字节的 JWT 密钥}
+      SCENIC_PG_HOST: pgvector
+      SCENIC_MYSQL_HOST: mysql
+    ports:
+      - "10086:10086"
+
+volumes:
+  scenic-mysql-data:
+  scenic-pgvector-data:
+  scenic-redis-data:

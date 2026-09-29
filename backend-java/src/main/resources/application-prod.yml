@@ -1,0 +1,60 @@
+# Wave 6 · 生产 profile
+#
+# 激活方式：SPRING_PROFILES_ACTIVE=prod 或 --spring.profiles.active=prod
+# 该文件只覆盖「与开发环境不同」的部分；其余沿用 application.yml。
+#
+# 与开发配置的四处主要差异（都是有意为之）：
+#   1. 日志安静下来，且不再打印 SQL（开发时用 StdOutImpl 方便排查，生产只会刷屏并影响性能）；
+#   2. 监控端点收窄到 health + prometheus（开发环境额外暴露了 metrics/info）；
+#   3. 限流更严、语义缓存阈值更保守（生产里「答错」的代价远高于「少命中」）；
+#   4. 关闭故障注入工具。
+#
+# 密钥一律不写在本文件：仍从环境变量（.env / docker-compose environment）读取。
+
+logging:
+  level:
+    com.scenic.ai: info
+    org.springframework: warn
+    org.apache.ibatis: warn
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+
+server:
+  tomcat:
+    threads:
+      max: 400
+      min-spare: 20
+    accept-count: 200
+
+cache:
+  semantic:
+    # 生产更保守：宁可少命中，不可把 A 的问题错答成 B 的答案
+    min-score: 0.95
+    ttl-hours: 12
+
+gateway:
+  rate-limit:
+    # 生产按真实成本收敛额度（开发环境是 20，方便联调）
+    per-minute: 10
+
+agent:
+  debug-tools:
+    enabled: false
+  max-steps: 6
+  # 生产上下文预算收紧（省 token 成本）
+  context:
+    max-chars: 5000
+
+mcp:
+  # MCP 端点的配额对客户端更宽松（一次会话会连续调多个工具），
+  # 但 auth-token 必须显式配置，否则启动日志会告警。
+  rate-limit:
+    per-minute: 120

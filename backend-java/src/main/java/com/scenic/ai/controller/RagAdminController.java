@@ -200,10 +200,23 @@ public class RagAdminController {
         return Result.success(Map.of("loaded", bm25Index.isLoaded(), "chunks", bm25Index.size()));
     }
 
-    /** 检索质量评测：对比 纯向量 / 混合 / 混合+rerank 的 Recall@5 */
+    /**
+     * 检索质量评测：一次给出 Recall@K / Hit@1 / MRR。
+     * Wave 6 起三项指标都在代码内计算（原先只有 Recall@K，其余靠人工核算），可自动回归。
+     */
     @PostMapping("/eval")
     public Result<?> eval() {
         return Result.success(evalRunner.run());
+    }
+
+    /**
+     * Wave 6 · 对抗样本检验：用「语义相近但答案不同」的问题对，
+     * 验证语义缓存的相似度阈值是否安全（会不会把 A 的答案给 B）。
+     */
+    @GetMapping("/adversarial")
+    public Result<?> adversarial(@RequestParam(required = false) Double threshold) {
+        double effectiveThreshold = threshold != null ? threshold : 0.92;
+        return Result.success(evalRunner.adversarialReport(effectiveThreshold));
     }
 
     private String extension(Path path) {
