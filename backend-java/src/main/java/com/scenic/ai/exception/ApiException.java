@@ -34,4 +34,9 @@ public class ApiException extends RuntimeException {
     public static ApiException tooManyRequests(String message) {
         return new ApiException(429, message);
     }
+
+    /** Wave 4 · 幂等冲突：同一请求正在处理中 */
+    public static ApiException conflict(String message) {
+        return new ApiException(409, message);
+    }
 }

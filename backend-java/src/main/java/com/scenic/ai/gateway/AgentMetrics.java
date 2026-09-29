@@ -113,7 +113,10 @@ public class AgentMetrics {
                 .tag("method", method)
                 .tag("uri", uri)
                 .tag("status", String.valueOf(status))
+                // histogram 供 Prometheus 侧算任意分位；
+                // publishPercentiles 让 Java 侧（成本/延迟台账接口）能直接读 P50/P95/P99
                 .publishPercentileHistogram()
+                .publishPercentiles(0.5, 0.95, 0.99)
                 .minimumExpectedValue(Duration.ofMillis(10))
                 .maximumExpectedValue(Duration.ofSeconds(30))
                 .register(registry)

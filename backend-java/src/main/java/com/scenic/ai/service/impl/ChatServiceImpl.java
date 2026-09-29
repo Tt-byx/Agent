@@ -8,6 +8,7 @@ import com.scenic.ai.dto.ChatResponse;
 import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.exception.ApiException;
+import com.scenic.ai.gateway.IdempotencyStore;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
 import com.scenic.ai.security.AuthUser;
@@ -43,6 +44,9 @@ public class ChatServiceImpl implements ChatService {
     private JwtService jwtService;
 
     @Autowired
+    private IdempotencyStore idempotencyStore;
+
+    @Autowired
     private ConversationMapper conversationMapper;
 
     @Autowired
@@ -51,6 +55,32 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public ChatResponse chat(ChatRequest request) {
         Long currentUserId = CurrentUser.id();   // 游客未登录时为 null
+
+        // ── Wave 4 · 幂等：同一身份 + 同一 requestId 只真正执行一次 ──
+        // 作用域用「服务端认定的身份」而不是请求里声明的 visitorId，避免 A 用 B 的 requestId 拿到 B 的结果。
+        String idemKey = null;
+        if (request.getRequestId() != null && !request.getRequestId().isBlank()) {
+            String identity;
+            if (currentUserId != null) {
+                identity = "user:" + currentUserId;
+            } else {
+                String guestId = jwtService.parseGuestVisitorId(
+                        jwtService.stripBearer(request.getVisitorToken()));
+                identity = guestId != null ? guestId : "anonymous";
+            }
+            idemKey = idempotencyStore.buildKey(identity, request.getRequestId());
+
+            ChatResponse firstResult = idempotencyStore.find(idemKey);
+            if (firstResult != null) {
+                log.info("[IDEMPOTENT] requestId={} 已处理过，直接返回首次结果（不再调用模型）",
+                        request.getRequestId());
+                return firstResult;
+            }
+            if (!idempotencyStore.tryLock(idemKey)) {
+                // 已有同请求在处理中：明确拒绝，而不是并发重复跑一遍
+                throw ApiException.conflict("相同的请求正在处理中，请勿重复提交");
+            }
+        }
 
         // 1. 处理会话ID（Wave 0：增加归属校验与 userId 回填）
         String sessionId = request.getSessionId();
@@ -99,7 +129,13 @@ public class ChatServiceImpl implements ChatService {
         aiMsg.setSentiment(SentimentAnalyzer.analyze(reply));
         chatMessageMapper.insert(aiMsg);
 
-        return new ChatResponse(reply, sessionId);
+        ChatResponse response = new ChatResponse(reply, sessionId);
+        if (idemKey != null) {
+            // 成功：落幂等结果并释放占位锁。
+            // 失败路径不落结果，锁由 TTL（默认 60s）自动过期，客户端可安全重试。
+            idempotencyStore.saveAndUnlock(idemKey, response);
+        }
+        return response;
     }
 
     private Long createConversation(String sessionId, String message, Long userId) {

@@ -46,4 +46,14 @@ public class ChatRequest {
      */
     @Size(max = 1024, message = "visitorToken 过长")
     private String visitorToken;
+
+    /**
+     * Wave 4 · 幂等键（可选，建议前端每次发送生成一个 UUID）。
+     *
+     * 带上它之后：同一身份 + 同一 requestId 的重复提交（用户狂点、网络重试、前端重发）
+     * 只会真正执行一次，后续请求直接返回首次结果，不再重复调模型与重复落库。
+     * 不传则退化为「不去重」的原有行为。
+     */
+    @Size(max = 64, message = "requestId 最长 64 字符")
+    private String requestId;
 }

@@ -5,6 +5,13 @@
       charset: UTF-8
       force: true
       enabled: true
+  # Wave 4 · Tomcat 线程池显式配置（原先全为默认值，无法按容量规划调整）
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 10
+    accept-count: 100
+    max-connections: 8192
 
 spring:
   # 本地私有配置（密钥等），不进版本库；文件不存在也不影响启动
@@ -20,6 +27,14 @@ spring:
     # D2 · 密码不硬编码：默认仅为本机演示值，公开仓库前在 .env 里设 SCENIC_MYSQL_PASSWORD
     password: ${SCENIC_MYSQL_PASSWORD:123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    # Wave 4 · HikariCP 显式配置（原先全默认：池上限隐式、无生命周期管理）
+    hikari:
+      pool-name: scenic-mysql
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1740000
   servlet:
     multipart:
       max-file-size: 50MB
@@ -162,6 +177,10 @@ cache:
     enabled: true
     # 命中阈值：语义相似度必须高于此值才复用答案
     min-score: 0.92
+    # Wave 4 · TTL：超过该时长的缓存不再复用（无时间戳的历史条目按已过期处理）
+    ttl-hours: 24
+    # Wave 4 · 容量上限：超过后按写入时间淘汰最旧的（近似 LRU），防止缓存表无限增长
+    max-entries: 5000
 
 # P8 · 网关
 gateway:
@@ -169,6 +188,23 @@ gateway:
     enabled: true
     # 每个游客（visitorId/IP）每分钟最多的对话请求数
     per-minute: 20
+  # Wave 4 · 幂等：带 requestId 的重复提交只真正执行一次
+  idempotency:
+    # 首次结果保留多久（期间重复提交直接复用）
+    ttl-minutes: 30
+    # 「处理中」占位锁的时长；处理失败后锁到期即可重试
+    lock-seconds: 60
+
+# Wave 4 · 成本台账单价（元 / 千 token）。
+# 仅用于「量级估算」，不代表真实账单；接入实际采购价后可直接替换。
+ops:
+  pricing:
+    flash:
+      input-per-1k: 0.001
+      output-per-1k: 0.002
+    pro:
+      input-per-1k: 0.004
+      output-per-1k: 0.012
 
 management:
   endpoints:

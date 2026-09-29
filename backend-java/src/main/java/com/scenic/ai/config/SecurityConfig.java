@@ -67,6 +67,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/admin-ai/**", "/api/knowledge/**", "/api/rag/**",
                                 "/api/analytics/**", "/api/dashboard/**",
                                 "/api/visitor-profiles/**").hasRole("ADMIN")
+                        // Wave 4 · 成本/延迟台账属于经营数据，仅管理员可见
+                        .requestMatchers("/api/ops/**").hasRole("ADMIN")
                         // 其余（会话历史、反馈等）：登录即可，资源归属校验在业务层
                         .anyRequest().authenticated())
                 .exceptionHandling(handling -> handling

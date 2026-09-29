@@ -112,6 +112,37 @@ public class VectorStoreAdmin {
         }
     }
 
+    /**
+     * Wave 4 · 通用：某表的条目数（不限于知识库向量表，语义缓存表也用）
+     */
+    public long countTable(String tableName) {
+        Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + tableName, Long.class);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * Wave 4 · 通用：按时间字段清理最旧条目，保留 keepCount 条。
+     * 用于给语义缓存做**容量上限**（近似的 LRU：按写入时间淘汰）。
+     * 没有时间字段的历史条目视为最旧、优先清理（`NULLS FIRST`）。
+     *
+     * @return 实际删除条数
+     */
+    public int deleteOldestEntries(String tableName, String timestampKey, int keepCount) {
+        long total = countTable(tableName);
+        long excess = total - keepCount;
+        if (excess <= 0) {
+            return 0;
+        }
+        // timestampKey 是内部常量（非用户输入），此处拼接无注入风险
+        int deleted = jdbcTemplate.update(
+                "DELETE FROM " + tableName + " WHERE embedding_id IN ("
+                        + "SELECT embedding_id FROM " + tableName
+                        + " ORDER BY (metadata->>'" + timestampKey + "') ASC NULLS FIRST LIMIT ?)",
+                excess);
+        log.info("[VECTOR-ADMIN] 表 {} 超出容量上限，已清理最旧 {} 条", tableName, deleted);
+        return deleted;
+    }
+
     @PreDestroy
     public void close() {
         if (dataSource != null && !dataSource.isClosed()) {
