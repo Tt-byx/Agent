@@ -154,6 +154,9 @@ agent:
   # 故障注入工具开关：仅用于验收「工具失败后 Agent 能自纠或优雅告知」
   debug-tools:
     enabled: false
+  # Wave 5 · 流式（SSE）：单次流式对话的整体超时；超时 SseEmitter 自动结束
+  stream:
+    timeout-ms: 300000
   # P9 · 多 Agent 编排（Supervisor）：开启后对话由调度者委派给专家 Agent
   multi:
     enabled: false

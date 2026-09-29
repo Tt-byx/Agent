@@ -138,6 +138,55 @@ public class ChatServiceImpl implements ChatService {
         return response;
     }
 
+    /**
+     * Wave 5 · 流式对话。会话处理、归属校验、落库与非流式**完全共用**，
+     * 差别只有「答案怎么产出」——由 {@code AgentLoop.runStreaming} 以增量回调给出。
+     *
+     * 注意：流式路径**不接入幂等** —— SSE 的响应是增量流，无法像整段响应那样缓存复用；
+     * 防重复提交仍由限流与前端控制（这一点写进 ADR，避免被误认为遗漏）。
+     */
+    @Override
+    public void chatStream(ChatRequest request, AgentLoop.StreamSink sink) {
+        Long currentUserId = CurrentUser.id();
+
+        String sessionId = request.getSessionId();
+        Long conversationId;
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = UUID.randomUUID().toString();
+            conversationId = createConversation(sessionId, request.getMessage(), currentUserId);
+        } else {
+            Conversation conversation = conversationMapper.selectOne(
+                    new LambdaQueryWrapper<Conversation>()
+                            .eq(Conversation::getSessionId, sessionId));
+            if (conversation == null) {
+                conversationId = createConversation(sessionId, request.getMessage(), currentUserId);
+            } else {
+                assertConversationOwnership(conversation, currentUserId);
+                conversationId = conversation.getId();
+            }
+        }
+
+        ChatMessage userMsg = new ChatMessage();
+        userMsg.setConversationId(conversationId);
+        userMsg.setRole("user");
+        userMsg.setContent(request.getMessage());
+        userMsg.setSentiment(SentimentAnalyzer.analyze(request.getMessage()));
+        chatMessageMapper.insert(userMsg);
+
+        String memoryKey = resolveMemoryKey(request, sessionId);
+        AgentLoop.Result result = agentLoop.runStreaming(sessionId, memoryKey, request.getMessage(), sink);
+
+        ChatMessage aiMsg = new ChatMessage();
+        aiMsg.setConversationId(conversationId);
+        aiMsg.setRole("assistant");
+        aiMsg.setContent(result.answer());
+        aiMsg.setSentiment(SentimentAnalyzer.analyze(result.answer()));
+        chatMessageMapper.insert(aiMsg);
+
+        log.info("[STREAM] 对话完成：{} 步、{} 次工具调用、收敛={}、终止原因={}",
+                result.stepCount(), result.toolCallCount(), result.converged(), result.stopReason());
+    }
+
     private Long createConversation(String sessionId, String message, Long userId) {
         Conversation conversation = new Conversation();
         conversation.setSessionId(sessionId);

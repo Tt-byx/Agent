@@ -12,6 +12,7 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -67,8 +68,11 @@ public class AgentLoop {
     private final int maxSteps;
     private final long timeoutSeconds;
     private final int maxToolsPerStep;
+    /** Wave 5 · 流式路径专用（SSE）；同步路径仍用 chatModel */
+    private final StreamingChatModel streamingChatModel;
 
     public AgentLoop(ChatModel chatModel,
+                     StreamingChatModel streamingChatModel,
                      AgentToolbox toolbox,
                      ShortTermMemory shortTermMemory,
                      LongTermMemory longTermMemory,
@@ -80,6 +84,7 @@ public class AgentLoop {
                      @Value("${agent.system-prompt:prompts/scenic-agent-system.txt}") String systemPromptPath)
             throws IOException {
         this.chatModel = chatModel;
+        this.streamingChatModel = streamingChatModel;
         this.toolbox = toolbox;
         this.shortTermMemory = shortTermMemory;
         this.longTermMemory = longTermMemory;
@@ -215,6 +220,200 @@ public class AgentLoop {
         log.warn("Agent 达到最大步数 {}，触发强制收口", maxSteps);
         metrics.runAborted();
         return new Result(convergeAfterAbort(messages), trace, maxSteps, false, "MAX_STEPS");
+    }
+
+    /**
+     * Wave 5 · 流式输出回调（由 SSE 端点实现）。
+     *
+     * 事件语义：
+     *   onStepStart → 某步开始（前端可提示"正在检索/思考"）
+     *   onToken     → **正式回答**的增量文本
+     *   onDiscard   → 撤销某步已显示的文本（该步其实在请求工具，不是最终答案）
+     *   onStepEnd   → 某步结束（usedTools 标明该步是否调了工具）
+     *   onDone      → 最终完整答案（前端用它做兜底校验）
+     */
+    public interface StreamSink {
+        default void onStepStart(int step) {}
+
+        void onToken(int step, String token);
+
+        default void onDiscard(int step) {}
+
+        default void onStepEnd(int step, boolean usedTools) {}
+
+        void onDone(String answer);
+
+        void onError(String message);
+    }
+
+    /**
+     * Wave 5 · 流式执行（SSE 路径）。与 {@link #runWith} 同构 ——
+     * 同样的步数上限、整体超时、工具执行与异常回灌、记忆与缓存写入、强制收口，
+     * 唯一区别是**模型输出以增量回调实时推给前端**，因此首字延迟不再等于整轮耗时。
+     *
+     * 两个关键取舍（写在这里，因为它们决定了这套实现能不能用）：
+     *
+     *   ① **只推 onPartialResponse**。本项目的 DeepSeek flash 会输出大量推理 token
+     *      （实测占输出的大头），它们走 onPartialThinking 回调 —— 这里不作实现（默认丢弃）。
+     *      否则用户会看到满屏内部思考。这是流式在本项目能用的前提。
+     *
+     *   ② **推流时无法预判哪一步是最终答案**。所以约定「每步 token 带 step 标记；
+     *      步结束时若该步请求了工具，就发 onDiscard(step) 让前端撤销」——
+     *      正确性由这个撤销协议兜底，而不是靠猜测。
+     */
+    public Result runStreaming(String sessionId, String memoryKey, String question, StreamSink sink) {
+        metrics.runStarted();
+
+        // 1. 语义缓存命中：流式路径同样受益（直接给完整答案，不再调模型）
+        java.util.Optional<String> cached = semanticCache.lookup(question);
+        if (cached.isPresent()) {
+            metrics.cacheHit();
+            String answer = cached.get();
+            // 缓存命中也以 token 事件下发：前端只维护一条渲染路径（收到 token 就追加），
+            // 不必为「缓存命中」单独写分支。内容与 done 完全一致，只是少了逐字延迟。
+            sink.onToken(0, answer);
+            sink.onDone(answer);
+            return new Result(answer, List.of(), 0, true, "CACHE_HIT");
+        }
+        metrics.cacheMiss();
+
+        String systemMessage = buildSystemMessage(baseSystemPrompt, memoryKey, question);
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(systemMessage));
+        messages.add(UserMessage.from(question));
+
+        List<Step> trace = new ArrayList<>();
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+
+        for (int step = 1; step <= maxSteps; step++) {
+            if (System.currentTimeMillis() > deadline) {
+                log.warn("[STREAM] Agent 整体超时（{}s），已执行 {} 步，收口返回", timeoutSeconds, step - 1);
+                metrics.runAborted();
+                String closing = convergeAfterAbort(messages);
+                sink.onDone(closing);
+                return new Result(closing, trace, step - 1, false, "TIMEOUT");
+            }
+
+            sink.onStepStart(step);
+            long modelStart = System.currentTimeMillis();
+            final int currentStep = step;
+
+            java.util.concurrent.atomic.AtomicReference<ChatResponse> responseRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Throwable> errorRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+
+            try {
+                streamingChatModel.chat(
+                        ChatRequest.builder()
+                                .messages(messages)
+                                .toolSpecifications(toolbox.specifications())
+                                .build(),
+                        new dev.langchain4j.model.chat.response.StreamingChatResponseHandler() {
+                            @Override
+                            public void onPartialResponse(String partialResponse) {
+                                // 只推正式回答；推理增量走 onPartialThinking（此处不实现 = 丢弃）
+                                sink.onToken(currentStep, partialResponse);
+                            }
+
+                            @Override
+                            public void onCompleteResponse(ChatResponse response) {
+                                responseRef.set(response);
+                                latch.countDown();
+                            }
+
+                            @Override
+                            public void onError(Throwable error) {
+                                errorRef.set(error);
+                                latch.countDown();
+                            }
+                        });
+
+                if (!latch.await(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new java.util.concurrent.TimeoutException("流式模型调用超时");
+                }
+                if (errorRef.get() != null) {
+                    throw new RuntimeException(errorRef.get());
+                }
+            } catch (Exception e) {
+                metrics.agentStep(step, "model", System.currentTimeMillis() - modelStart);
+                log.error("[STREAM] 第 {} 步模型调用失败: {}", step, e.getMessage(), e);
+                metrics.runAborted();
+                metrics.degrade("model");
+                sink.onError(MODEL_ERROR_ANSWER);
+                return new Result(MODEL_ERROR_ANSWER, trace, step - 1, false, "MODEL_ERROR");
+            }
+            metrics.agentStep(step, "model", System.currentTimeMillis() - modelStart);
+
+            ChatResponse response = responseRef.get();
+            AiMessage aiMessage = response == null ? null : response.aiMessage();
+            if (aiMessage == null) {
+                metrics.runAborted();
+                sink.onError(MODEL_ERROR_ANSWER);
+                return new Result(MODEL_ERROR_ANSWER, trace, step - 1, false, "MODEL_ERROR");
+            }
+            messages.add(aiMessage);
+
+            // 终止条件：模型不再请求工具 → 这一步的文本就是最终答案（已边收边推给前端）
+            if (!aiMessage.hasToolExecutionRequests()) {
+                String answer = aiMessage.text();
+                if (answer == null || answer.isBlank()) {
+                    answer = FALLBACK_ANSWER;
+                }
+                metrics.runConverged();
+                rememberTurn(sessionId, question, answer);
+                semanticCache.store(question, answer);
+                sink.onStepEnd(step, false);
+                sink.onDone(answer);
+                log.info("[STREAM] Agent 收敛：共 {} 步、{} 次工具调用", step, trace.size());
+                return new Result(answer, trace, step, true, "CONVERGED");
+            }
+
+            // 该步请求了工具 → 它的增量文本不是给用户的答案，通知前端撤销
+            sink.onDiscard(step);
+
+            MemoryContextHolder.set(memoryKey);
+            try {
+                List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+                if (requests.size() > maxToolsPerStep) {
+                    log.warn("[STREAM] 第 {} 步请求了 {} 个工具，超过单步上限 {}",
+                            step, requests.size(), maxToolsPerStep);
+                }
+                for (int i = 0; i < requests.size(); i++) {
+                    ToolExecutionRequest request = requests.get(i);
+
+                    if (i >= maxToolsPerStep) {
+                        metrics.toolFailed(request.name());
+                        String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
+                                + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
+                        trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
+                        messages.add(ToolExecutionResultMessage.from(request, rejected));
+                        continue;
+                    }
+
+                    metrics.toolCalled(request.name());
+                    long toolStart = System.currentTimeMillis();
+                    String observation = toolbox.execute(request, sessionId);
+                    metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
+                    boolean failed = observation.contains("执行失败：");
+                    if (failed) {
+                        metrics.toolFailed(request.name());
+                    }
+                    trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
+                    messages.add(ToolExecutionResultMessage.from(request, observation));
+                }
+            } finally {
+                MemoryContextHolder.clear();
+            }
+            sink.onStepEnd(step, true);
+        }
+
+        log.warn("[STREAM] 达到最大步数 {}，触发强制收口", maxSteps);
+        metrics.runAborted();
+        String closing = convergeAfterAbort(messages);
+        sink.onDone(closing);
+        return new Result(closing, trace, maxSteps, false, "MAX_STEPS");
     }
 
     /**

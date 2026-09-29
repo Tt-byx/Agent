@@ -3,8 +3,11 @@ package com.scenic.ai.config;
 import com.scenic.ai.gateway.AgentMetrics;
 import com.scenic.ai.gateway.RetryPolicy;
 import com.scenic.ai.gateway.RoutedChatModel;
+import com.scenic.ai.gateway.RoutedStreamingChatModel;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -17,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * LangChain4j 装配：大模型客户端（P8 起为主备路由）。
+ * LangChain4j 装配：大模型客户端（同步 + 流式两条路径，共享同一批熔断器）。
  *
  * 模型走 OpenAI 兼容协议，替换 base-url / chat-model 即可切到 MiMo / DeepSeek / 百炼。
  * 密钥不写进仓库：来自环境变量或 application-local.yml（见 application.yml 的注释）。
@@ -47,6 +50,10 @@ public class LangChain4jConfig {
     @Value("${llm.max-retries:2}")
     private Integer maxRetries;
 
+    /** Wave 5 · 流式整体等待上限（单次模型调用的硬超时，防止流卡住不返回） */
+    @Value("${llm.stream-wait-timeout-seconds:180}")
+    private long streamWaitTimeoutSeconds;
+
     // Wave 1 · 熔断参数
     @Value("${llm.circuit-breaker.sliding-window-size:10}")
     private int cbSlidingWindowSize;
@@ -75,13 +82,12 @@ public class LangChain4jConfig {
     @Value("${llm.fallback.model:deepseek-v4-pro}")
     private String fallbackModel;
 
-    @Bean
-    public ChatModel chatModel(AgentMetrics metrics, RetryPolicy retryPolicy) {
-        warnIfKeyMissing();
+    // ───────────────────────── 同步路径（/api/chat） ─────────────────────────
 
-        // Wave 1 · 熔断：主备各自独立的失败率窗口。
-        // 主模型持续故障时，熔断打开后请求**直接跳过它**，不再每次白打一次再切备。
-        CircuitBreakerRegistry circuitBreakerRegistry = circuitBreakerRegistry();
+    @Bean
+    public ChatModel chatModel(AgentMetrics metrics, RetryPolicy retryPolicy,
+                               CircuitBreakerRegistry circuitBreakerRegistry) {
+        warnIfKeyMissing();
 
         // P8 · 主备路由：DeepSeek 同厂商双档 —— 主 flash（快、省），备 pro（更强）。
         // 主模型异常时自动切备，保可用性优先；硅基流动的 key 只用于 embedding/rerank，不做对话。
@@ -131,8 +137,68 @@ public class LangChain4jConfig {
         return new RoutedChatModel(routes, metrics, retryPolicy);
     }
 
-    /** Wave 1 · 熔断器注册表：主备各一个实例，共用一份配置 */
-    private CircuitBreakerRegistry circuitBreakerRegistry() {
+    // ───────────────────────── 流式路径（/api/chat/stream，Wave 5） ─────────────────────────
+
+    /**
+     * Wave 5 · 流式模型（SSE 用）。
+     *
+     * 与同步路径**共享同一批熔断器**（同一个 Registry、同样的候选名）：
+     * 主模型故障时，无论请求走哪条路径都会被跳过，健康状态是一致的 ——
+     * 这是「两条路径并存」而不是「用体验换可靠性」的关键。
+     *
+     * 用 {@link OpenAiStreamingChatModel} 而不是给同步模型套壳：
+     * 只有真正的流式客户端才能把首字延迟（TTFT）前移到「模型吐出第一个 token」的时刻。
+     */
+    @Bean
+    public StreamingChatModel streamingChatModel(AgentMetrics metrics, RetryPolicy retryPolicy,
+                                                 CircuitBreakerRegistry circuitBreakerRegistry) {
+        List<RoutedStreamingChatModel.Route> routes = new ArrayList<>();
+
+        String primaryName = "primary:" + chatModelName;
+        routes.add(new RoutedStreamingChatModel.Route(
+                primaryName,
+                OpenAiStreamingChatModel.builder()
+                        .baseUrl(baseUrl)
+                        .apiKey(effectiveApiKey())
+                        .modelName(chatModelName)
+                        .temperature(temperature)
+                        .maxTokens(maxTokens)
+                        .timeout(Duration.ofSeconds(timeoutSeconds))
+                        .logRequests(false)
+                        .logResponses(false)
+                        .build(),
+                circuitBreakerRegistry.circuitBreaker(primaryName)));
+
+        if (fallbackEnabled && fallbackApiKey != null && !fallbackApiKey.isBlank()) {
+            String fallbackName = "fallback:" + fallbackModel;
+            routes.add(new RoutedStreamingChatModel.Route(
+                    fallbackName,
+                    OpenAiStreamingChatModel.builder()
+                            .baseUrl(fallbackBaseUrl)
+                            .apiKey(fallbackApiKey)
+                            .modelName(fallbackModel)
+                            .temperature(temperature)
+                            .maxTokens(maxTokens)
+                            .timeout(Duration.ofSeconds(timeoutSeconds))
+                            .logRequests(false)
+                            .logResponses(false)
+                            .build(),
+                    circuitBreakerRegistry.circuitBreaker(fallbackName)));
+        }
+
+        return new RoutedStreamingChatModel(routes, metrics, retryPolicy, streamWaitTimeoutSeconds);
+    }
+
+    // ───────────────────────── 共享的熔断器注册表 ─────────────────────────
+
+    /**
+     * Wave 1 建立、Wave 5 提升为 Bean · 熔断器注册表。
+     *
+     * 提升为 Bean 的原因：**同步与流式两条路径必须共享同一批熔断器**。
+     * 如果各自 new 一个 Registry，主模型故障时会出现「同步路径已熔断、流式路径还在傻打它」的割裂状态。
+     */
+    @Bean
+    public CircuitBreakerRegistry circuitBreakerRegistry() {
         CircuitBreakerConfig config = CircuitBreakerConfig.custom()
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
                 .slidingWindowSize(cbSlidingWindowSize)
@@ -145,12 +211,20 @@ public class LangChain4jConfig {
         return CircuitBreakerRegistry.of(config);
     }
 
-    // P7：原先这里还有两个 Bean —— streamingChatModel 与声明式 AiService（ScenicAssistant），
-    // 二者都已随 AgentLoop 的引入而不再需要：
-    //   - AiServices 的内层工具循环**不暴露**「最大步数 / 整体超时 / 逐步可观测」这三样 P7 必需的旋钮；
-    //   - 因此 AgentLoop 直接用 ChatModel + ToolSpecifications + DefaultToolExecutor 自己组装循环，
-    //     并且**仍然复用 @Tool 注解**，工具声明不用重写一遍。
-    // 若将来要恢复逐 token 流式，把 streamingChatModel 加回来即可。
+    /*
+     * P7 的取舍与 Wave 5 的更新（ADR）：
+     *   P7 曾移除 streamingChatModel，选择「整段推送」换取循环可控性 ——
+     *   因为 AiServices 的内层工具循环不暴露「最大步数 / 整体超时 / 逐步可观测」三个旋钮。
+     *
+     *   Wave 5 的做法不是推翻 P7，而是**两条路径并存**：
+     *     /api/chat        保持非流式（稳定、可控，服务端可完整掌握每一步）
+     *     /api/chat/stream 走 SSE 真流式（首字延迟前移，代价是「首包后不可重试/切换」）
+     *   两条路径复用同一个 AgentLoop 骨架（工具执行、记忆、缓存、收口逻辑全部共享），
+     *   只有「模型调用的输出方式」不同。这样既拿到了流式体验，也没有退化原链路的可靠性。
+     *
+     *   工具声明仍然复用 @Tool 注解 —— AgentLoop 用 ToolSpecifications + DefaultToolExecutor
+     *   自己组装循环，从未依赖 AiServices。
+     */
 
     /**
      * LangChain4j 会校验 apiKey 非空，为空时直接抛异常会让整个应用起不来。
