@@ -53,7 +53,7 @@
 | 工具协议 | MCP Java SDK 2.0（`mcp-core` + `mcp-json-jackson2`，Streamable HTTP） |
 | 检索 | PostgreSQL **pgvector**（向量）+ 自研 BM25（JVM 内）+ bge-reranker-v2-m3 重排 |
 | 记忆/缓存 | Redis（滑窗 + 摘要）、pgvector（长期偏好 + 语义缓存） |
-| 模型 | DeepSeek（主）/ 硅基流动（备），OpenAI 兼容协议 |
+| 模型 | DeepSeek flash（主）/ deepseek-v4-pro（备）；硅基流动仅做 embedding + rerank |
 | 观测 | Micrometer + Prometheus + Grafana（面板：`backend-java/docs/`） |
 
 ## 快速开始
@@ -84,7 +84,7 @@ cd frontend && npm install && npm run dev
 | `--agent.multi.enabled=true` | 启用 Supervisor 多 Agent 编排（默认单 Agent，延迟更低） |
 | `--agent.debug-tools.enabled=true` | 注册故障注入工具，演示工具失败后的自纠 |
 | `--gateway.rate-limit.per-minute=20` | 每游客限流阈值 |
-| `--llm.api-key=invalid` | 故意破坏主模型，验证跨厂商降级 |
+| `--llm.api-key=invalid` | 故意破坏主模型，验证主备降级（flash → pro） |
 
 **MCP 接入**：在 Cherry Studio / Claude Desktop 中添加 Streamable HTTP 服务器，URL 填 `http://localhost:10086/mcp`，可发现并调用 3 个景区工具。
 

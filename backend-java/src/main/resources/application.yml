@@ -45,7 +45,7 @@ mybatis-plus:
 llm:
   base-url: ${SCENIC_LLM_BASE_URL:https://api.deepseek.com/v1}
   api-key: ${SCENIC_LLM_API_KEY:}
-  chat-model: ${SCENIC_LLM_MODEL:deepseek-flash}
+  chat-model: ${SCENIC_LLM_MODEL:deepseek-v4-pro}
   temperature: 0.7
   # deepseek-flash 会先输出推理 token（实测一次问答中推理占 85%）。
   # max-tokens 给小了会导致推理吃光额度、正式回答为空，故必须给足。
