@@ -31,19 +31,28 @@ public class ShortTermMemory {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final int maxTurns;
-    private final int summarizeThreshold;
 
     public record Turn(String role, String content) {}
 
     public ShortTermMemory(StringRedisTemplate redis,
                            ObjectMapper objectMapper,
-                           @Value("${memory.short-term.max-turns:10}") int maxTurns,
-                           @Value("${memory.short-term.summarize-threshold:16}") int summarizeThreshold) {
+                           @Value("${memory.short-term.max-turns:10}") int maxTurns) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.maxTurns = Math.max(maxTurns, 1);
-        this.summarizeThreshold = Math.max(summarizeThreshold, this.maxTurns * 2);
-        log.info("短期记忆就绪：滑窗 {} 轮，摘要阈值 {} 条消息", maxTurns, summarizeThreshold);
+        log.info("短期记忆就绪：滑窗 {} 轮（窗口容量 {} 条消息）", maxTurns, windowSize());
+    }
+
+    /**
+     * 滑窗容量（消息条数，1 轮 = 2 条）。
+     *
+     * Wave 6 · 修 B3：此前 `AgentLoop` 里硬编码了 20 条，与这里的 maxTurns 各说各话；
+     * 而配置项 `summarize-threshold` 先被 clamp 到 maxTurns×2、又被赋给一个**从未被读取**的字段 ——
+     * 是一个「看起来能调、实际是死的」配置（比没有配置更误导）。
+     * 现在窗口容量**只由 `max-turns` 决定**，并从记忆组件统一对外提供。
+     */
+    public int windowSize() {
+        return maxTurns * 2;
     }
 
     public void append(String sessionId, String role, String content) {

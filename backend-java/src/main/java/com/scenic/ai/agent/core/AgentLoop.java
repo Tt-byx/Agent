@@ -488,15 +488,12 @@ public class AgentLoop {
         shortTermMemory.append(sessionId, "assistant", answer);
 
         long size = shortTermMemory.size(sessionId);
-        if (size > shortTermWindowSize()) {
-            List<ShortTermMemory.Turn> drained = shortTermMemory.drain(sessionId, size - shortTermWindowSize());
+        // Wave 6 · 修 B3：窗口容量来自配置（memory.short-term.max-turns），不再硬编码 20
+        int window = shortTermMemory.windowSize();
+        if (size > window) {
+            List<ShortTermMemory.Turn> drained = shortTermMemory.drain(sessionId, size - window);
             summarize(sessionId, drained);
         }
-    }
-
-    private long shortTermWindowSize() {
-        // 滑窗按「消息条数」管理（1 轮 = 2 条）
-        return 20;
     }
 
     /** 把溢出的旧对话摘要化（best-effort，失败不影响主流程） */

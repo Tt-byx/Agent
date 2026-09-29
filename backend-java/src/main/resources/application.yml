@@ -165,10 +165,11 @@ agent:
 # P8 · 记忆体系
 memory:
   short-term:
-    # 滑窗保留的最大**轮**数（1 轮 = 用户一条 + 助手一条）
+    # 滑窗保留的最大**轮**数（1 轮 = 用户一条 + 助手一条）。
+    # Wave 6 · 修 B3：窗口容量只由它决定（= max-turns × 2 条消息）。
+    # 原先还有一个 summarize-threshold 配置，但它先被 clamp 到 max-turns×2、
+    # 又赋给了一个从未被读取的字段 —— 是死配置，已移除。
     max-turns: 10
-    # 累计消息数超过该值时，把最旧的溢出部分摘要化
-    summarize-threshold: 16
   long-term:
     # 召回用户偏好时取几条
     top-k: 3
