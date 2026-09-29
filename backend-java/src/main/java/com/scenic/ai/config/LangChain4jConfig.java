@@ -47,20 +47,21 @@ public class LangChain4jConfig {
     @Value("${llm.fallback.enabled:true}")
     private boolean fallbackEnabled;
 
-    @Value("${llm.fallback.base-url:https://api.siliconflow.cn/v1}")
+    @Value("${llm.fallback.base-url:https://api.deepseek.com/v1}")
     private String fallbackBaseUrl;
 
     @Value("${llm.fallback.api-key:${SCENIC_FALLBACK_API_KEY:}}")
     private String fallbackApiKey;
 
-    @Value("${llm.fallback.model:deepseek-ai/DeepSeek-V4-Flash}")
+    @Value("${llm.fallback.model:deepseek-v4-pro}")
     private String fallbackModel;
 
     @Bean
     public ChatModel chatModel(AgentMetrics metrics) {
         warnIfKeyMissing();
 
-        // P8 · 主备路由：主模型异常时自动切到备模型（可跨厂商，只要兼容 OpenAI 协议）
+        // P8 · 主备路由：DeepSeek 同厂商双档 —— 主 flash（快、省），备 pro（更强）。
+        // 主模型异常时自动切备，保可用性优先；硅基流动的 key 只用于 embedding/rerank，不做对话。
         List<RoutedChatModel.Route> routes = new ArrayList<>();
         routes.add(new RoutedChatModel.Route(
                 "primary:" + chatModelName,

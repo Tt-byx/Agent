@@ -14,9 +14,8 @@ import java.util.List;
  * 上层只知道「我调了个模型」，不知道背后有几个候选、也不需要知道降级发生过。
  *
  * 路由策略：按优先级顺序尝试；主模型异常（超时 / 429 / 5xx / 鉴权失败）→ 自动切到备模型。
- * 主备**可以跨厂商** —— 只要对方兼容 OpenAI 协议，换 base-url + key 即可。
- * 默认配置：主 = DeepSeek 官方 `deepseek-flash`，备 = 硅基流动 `deepseek-ai/DeepSeek-V4-Flash`
- * （同款模型、不同厂商，天然的「厂商故障降级」路径）。
+ * 默认配置是 **DeepSeek 同厂商双档**：主 = `deepseek-flash`（快、省），备 = `deepseek-v4-pro`（更强）——
+ * 降级时宁可多用预算也要保住可用性。硅基流动的 key 只负责 embedding 与 rerank，不做对话模型。
  *
  * 每次路由的成功/失败/耗时都打点，这是判断「备模型该不该转正」的数据依据。
  */

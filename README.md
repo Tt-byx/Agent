@@ -14,7 +14,7 @@
 | Agent 可靠性 | 自研 ReAct 循环，5 项验收全过；注入必失败工具后**自行换参数重试**再优雅降级，全程无 500 |
 | 性能 | 语义缓存命中后 **P50 3274ms → 201ms**，**QPS 2.5 → 23.1（约 9 倍）**，命中路径不调用模型（边际成本 0） |
 | 记忆 | 三层记忆（Redis 滑窗 / 会话摘要 / pgvector 长期偏好），实测**跨会话召回用户偏好** |
-| 高可用 | 跨厂商主备模型路由（主模型故障自动切换、用户零感知）+ Redis 限流 |
+| 高可用 | 同厂商双档主备模型路由（flash 主 / pro 备，主模型故障自动切换、用户零感知）+ Redis 限流 |
 | 可观测 | Micrometer / Prometheus 指标（路由健康 / 缓存命中 / 工具失败 / token 成本）+ Grafana 面板 |
 
 ## 与常见方案的差异
@@ -34,11 +34,12 @@
   ────────► │  (Streamable HTTP)  │        │                                            │
             │  Supervisor 编排 ───┘        ▼                                            │
             │                     混合检索（pgvector + BM25）→ Reranker                   │
-            │  RoutedChatModel（主/备跨厂商降级）      SemanticCache（pgvector）          │
+            │  RoutedChatModel（flash 主 / pro 备降级）  SemanticCache（pgvector）      │
             │        │                                  │                               │
             └────────┼──────────────────────────────────┼───────────────────────────────┘
                      ▼                                  ▼
-        DeepSeek 官方 / 硅基流动（OpenAI 兼容）   PostgreSQL + pgvector   Redis   MySQL
+        DeepSeek（flash 主 / pro 备）   PostgreSQL + pgvector   Redis   MySQL
+        硅基流动（embedding + rerank）
 ```
 
 - 一次对话的完整路径：语义缓存查 → 记忆召回（长期偏好 + 会话上下文）→ ReAct 循环（按需检索 / 调工具）→ 强制收口 → 回写记忆与缓存，全程 Micrometer 打点。
