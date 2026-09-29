@@ -1,9 +1,12 @@
 package com.scenic.ai.config;
 
 import com.scenic.ai.gateway.AgentMetrics;
+import com.scenic.ai.gateway.RetryPolicy;
 import com.scenic.ai.gateway.RoutedChatModel;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -44,6 +47,22 @@ public class LangChain4jConfig {
     @Value("${llm.max-retries:2}")
     private Integer maxRetries;
 
+    // Wave 1 · 熔断参数
+    @Value("${llm.circuit-breaker.sliding-window-size:10}")
+    private int cbSlidingWindowSize;
+
+    @Value("${llm.circuit-breaker.minimum-number-of-calls:5}")
+    private int cbMinimumCalls;
+
+    @Value("${llm.circuit-breaker.failure-rate-threshold:50}")
+    private float cbFailureRateThreshold;
+
+    @Value("${llm.circuit-breaker.wait-duration-seconds:30}")
+    private long cbWaitSeconds;
+
+    @Value("${llm.circuit-breaker.half-open-calls:2}")
+    private int cbHalfOpenCalls;
+
     @Value("${llm.fallback.enabled:true}")
     private boolean fallbackEnabled;
 
@@ -57,14 +76,19 @@ public class LangChain4jConfig {
     private String fallbackModel;
 
     @Bean
-    public ChatModel chatModel(AgentMetrics metrics) {
+    public ChatModel chatModel(AgentMetrics metrics, RetryPolicy retryPolicy) {
         warnIfKeyMissing();
+
+        // Wave 1 · 熔断：主备各自独立的失败率窗口。
+        // 主模型持续故障时，熔断打开后请求**直接跳过它**，不再每次白打一次再切备。
+        CircuitBreakerRegistry circuitBreakerRegistry = circuitBreakerRegistry();
 
         // P8 · 主备路由：DeepSeek 同厂商双档 —— 主 flash（快、省），备 pro（更强）。
         // 主模型异常时自动切备，保可用性优先；硅基流动的 key 只用于 embedding/rerank，不做对话。
         List<RoutedChatModel.Route> routes = new ArrayList<>();
+        String primaryName = "primary:" + chatModelName;
         routes.add(new RoutedChatModel.Route(
-                "primary:" + chatModelName,
+                primaryName,
                 OpenAiChatModel.builder()
                         .baseUrl(baseUrl)
                         .apiKey(effectiveApiKey())
@@ -72,14 +96,17 @@ public class LangChain4jConfig {
                         .temperature(temperature)
                         .maxTokens(maxTokens)
                         .timeout(Duration.ofSeconds(timeoutSeconds))
-                        .maxRetries(maxRetries)
+                        // Wave 1：关闭内置「无差别重试」，改由 RetryPolicy 按错误类型分级重试
+                        .maxRetries(0)
                         .logRequests(false)
                         .logResponses(false)
-                        .build()));
+                        .build(),
+                circuitBreakerRegistry.circuitBreaker(primaryName)));
 
         if (fallbackEnabled && fallbackApiKey != null && !fallbackApiKey.isBlank()) {
+            String fallbackName = "fallback:" + fallbackModel;
             routes.add(new RoutedChatModel.Route(
-                    "fallback:" + fallbackModel,
+                    fallbackName,
                     OpenAiChatModel.builder()
                             .baseUrl(fallbackBaseUrl)
                             .apiKey(fallbackApiKey)
@@ -87,16 +114,35 @@ public class LangChain4jConfig {
                             .temperature(temperature)
                             .maxTokens(maxTokens)
                             .timeout(Duration.ofSeconds(timeoutSeconds))
-                            .maxRetries(1)
+                            .maxRetries(0)
                             .logRequests(false)
                             .logResponses(false)
-                            .build()));
+                            .build(),
+                    circuitBreakerRegistry.circuitBreaker(fallbackName)));
             log.info("[ROUTE] 已启用备用模型：{} @ {}", fallbackModel, fallbackBaseUrl);
         } else {
             log.warn("[ROUTE] 未配置备用模型（llm.fallback.api-key 为空），主模型故障时将直接报错");
         }
 
-        return new RoutedChatModel(routes, metrics);
+        log.info("[ROUTE] 熔断参数：窗口 {} 次 / 最少样本 {} 次 / 失败率阈值 {}% / 打开 {}s / 半开放行 {} 次",
+                cbSlidingWindowSize, cbMinimumCalls, cbFailureRateThreshold,
+                cbWaitSeconds, cbHalfOpenCalls);
+
+        return new RoutedChatModel(routes, metrics, retryPolicy);
+    }
+
+    /** Wave 1 · 熔断器注册表：主备各一个实例，共用一份配置 */
+    private CircuitBreakerRegistry circuitBreakerRegistry() {
+        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+                .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(cbSlidingWindowSize)
+                .minimumNumberOfCalls(cbMinimumCalls)
+                .failureRateThreshold(cbFailureRateThreshold)
+                .waitDurationInOpenState(Duration.ofSeconds(cbWaitSeconds))
+                .permittedNumberOfCallsInHalfOpenState(cbHalfOpenCalls)
+                .automaticTransitionFromOpenToHalfOpenEnabled(true)
+                .build();
+        return CircuitBreakerRegistry.of(config);
     }
 
     // P7：原先这里还有两个 Bean —— streamingChatModel 与声明式 AiService（ScenicAssistant），

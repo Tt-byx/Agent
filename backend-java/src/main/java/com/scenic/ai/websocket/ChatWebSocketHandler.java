@@ -2,7 +2,8 @@ package com.scenic.ai.websocket;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scenic.ai.agent.core.AgentLoop;
-import com.scenic.ai.controller.AuthController;
+import com.scenic.ai.security.AuthUser;
+import com.scenic.ai.security.JwtService;
 import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.entity.VisitorProfileTag;
@@ -41,6 +42,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private ObjectMapper objectMapper;
 
     @Autowired
+    private JwtService jwtService;
+
+    @Autowired
     private AgentLoop agentLoop;
 
     @Autowired
@@ -58,15 +62,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) {
         sessions.put(session.getId(), session);
 
-        // 解析 token 参数获取 userId
+        // 解析 token 参数获取 userId（Wave 0：token 为 JWT，无状态校验，不再依赖内存 tokenStore）
         String query = session.getUri() != null ? session.getUri().getQuery() : null;
         if (query != null) {
             for (String param : query.split("&")) {
                 if (param.startsWith("token=")) {
-                    String token = param.substring(6);
-                    Long userId = AuthController.getUserIdFromToken(token);
-                    if (userId != null) {
-                        session.getAttributes().put("userId", userId);
+                    AuthUser user = jwtService.parse(param.substring(6));
+                    if (user != null) {
+                        session.getAttributes().put("userId", user.id());
                     }
                     break;
                 }

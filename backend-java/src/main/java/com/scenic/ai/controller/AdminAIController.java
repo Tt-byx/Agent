@@ -208,10 +208,24 @@ public class AdminAIController {
         profile.put("nickname", user != null ? user.getNickname() : "游客");
 
         // 对话情感统计
+        // Wave 0 · 修 B1：原实现用 inSql 拼字符串（"... WHERE user_id = " + userId）。
+        // 改为「先查会话 ID，再按 ID 集合查消息」两步走，彻底消除 SQL 拼接，
+        // 也避免了会话很多时拼出超长子查询。
+        List<Long> conversationIds = conversationMapper.selectList(
+                        new LambdaQueryWrapper<com.scenic.ai.entity.Conversation>()
+                                .eq(com.scenic.ai.entity.Conversation::getUserId, userId)
+                                .select(com.scenic.ai.entity.Conversation::getId))
+                .stream().map(com.scenic.ai.entity.Conversation::getId).toList();
+
+        if (conversationIds.isEmpty()) {
+            profile.put("sentiment", "中性");
+            profile.put("snippet", "");
+            return profile;
+        }
+
         var messages = chatMessageMapper.selectList(
                 new LambdaQueryWrapper<com.scenic.ai.entity.ChatMessage>()
-                        .inSql(com.scenic.ai.entity.ChatMessage::getConversationId,
-                                "SELECT id FROM conversation WHERE user_id = " + userId)
+                        .in(com.scenic.ai.entity.ChatMessage::getConversationId, conversationIds)
                         .eq(com.scenic.ai.entity.ChatMessage::getRole, "user"));
         if (!messages.isEmpty()) {
             long positive = messages.stream().filter(m -> "positive".equals(m.getSentiment())).count();

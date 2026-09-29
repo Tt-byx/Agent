@@ -33,14 +33,16 @@ public class MultiAgentOrchestrator {
     public MultiAgentOrchestrator(AgentLoop agentLoop,
                                   DelegationTool delegationTool,
                                   SpecialistRegistry registry,
+                                  AgentToolbox mainToolbox,
                                   @Value("${agent.multi.enabled:false}") boolean enabled,
                                   @Value("${agent.system-prompt:prompts/scenic-agent-system.txt}") String promptPath)
             throws IOException {
         this.agentLoop = agentLoop;
         this.enabled = enabled;
 
-        // Supervisor 的工具箱里**只有委派工具** —— 它自己不碰业务工具
-        this.supervisorToolbox = AgentToolbox.of(List.of(delegationTool));
+        // Supervisor 的工具箱里**只有委派工具** —— 它自己不碰业务工具。
+        // Wave 1 起复用主工具箱的执行资源（线程池/重试策略/超时配置），不再单独 new 一套。
+        this.supervisorToolbox = mainToolbox.withTools(List.of(delegationTool));
 
         StringBuilder sb = new StringBuilder(
                 new ClassPathResource(promptPath).getContentAsString(StandardCharsets.UTF_8));

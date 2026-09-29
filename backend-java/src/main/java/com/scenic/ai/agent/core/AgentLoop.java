@@ -66,6 +66,7 @@ public class AgentLoop {
     private final String baseSystemPrompt;
     private final int maxSteps;
     private final long timeoutSeconds;
+    private final int maxToolsPerStep;
 
     public AgentLoop(ChatModel chatModel,
                      AgentToolbox toolbox,
@@ -75,6 +76,7 @@ public class AgentLoop {
                      AgentMetrics metrics,
                      @Value("${agent.max-steps:6}") int maxSteps,
                      @Value("${agent.timeout-seconds:120}") long timeoutSeconds,
+                     @Value("${agent.max-tools-per-step:4}") int maxToolsPerStep,
                      @Value("${agent.system-prompt:prompts/scenic-agent-system.txt}") String systemPromptPath)
             throws IOException {
         this.chatModel = chatModel;
@@ -85,10 +87,12 @@ public class AgentLoop {
         this.metrics = metrics;
         this.maxSteps = Math.max(maxSteps, 1);
         this.timeoutSeconds = timeoutSeconds;
+        // Wave 1 · 单步工具上限：模型一次返回过多工具调用会放大延迟与成本
+        this.maxToolsPerStep = Math.max(1, maxToolsPerStep);
         this.baseSystemPrompt = new ClassPathResource(systemPromptPath)
                 .getContentAsString(StandardCharsets.UTF_8);
-        log.info("AgentLoop 就绪：最大步数 {}，整体超时 {}s，工具 {} 个",
-                this.maxSteps, this.timeoutSeconds, toolbox.size());
+        log.info("AgentLoop 就绪：最大步数 {}，整体超时 {}s，单步工具上限 {}，工具 {} 个",
+                this.maxSteps, this.timeoutSeconds, this.maxToolsPerStep, toolbox.size());
     }
 
     public Result run(String sessionId, String userMessage) {
@@ -150,6 +154,7 @@ public class AgentLoop {
             } catch (Exception e) {
                 log.error("Agent 第 {} 步模型调用失败: {}", step, e.getMessage(), e);
                 metrics.runAborted();
+                metrics.degrade("model");
                 return new Result(MODEL_ERROR_ANSWER, trace, step - 1, false, "MODEL_ERROR");
             }
             messages.add(aiMessage);
@@ -170,7 +175,25 @@ public class AgentLoop {
             // act → observe（工具执行期间暴露 memoryKey，供记忆类工具写入）
             MemoryContextHolder.set(memoryKey);
             try {
-                for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
+                List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+                // Wave 1 · 单步工具数上限：超出部分不执行，直接以失败文本回灌，
+                // 让模型知道"这一步要的太多了"，而不是无限放大本步的耗时与成本。
+                if (requests.size() > maxToolsPerStep) {
+                    log.warn("第 {} 步请求了 {} 个工具，超过单步上限 {}，仅执行前 {} 个",
+                            step, requests.size(), maxToolsPerStep, maxToolsPerStep);
+                }
+                for (int i = 0; i < requests.size(); i++) {
+                    ToolExecutionRequest request = requests.get(i);
+
+                    if (i >= maxToolsPerStep) {
+                        metrics.toolFailed();
+                        String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
+                                + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
+                        trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
+                        messages.add(ToolExecutionResultMessage.from(request, rejected));
+                        continue;
+                    }
+
                     metrics.toolCalled();
                     String observation = agentToolbox.execute(request, sessionId);
                     boolean failed = observation.contains("执行失败：");

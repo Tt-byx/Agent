@@ -6,6 +6,7 @@ import com.scenic.ai.entity.ChatMessage;
 import com.scenic.ai.entity.Conversation;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
+import com.scenic.ai.security.CurrentUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,9 +27,8 @@ public class ConversationController {
 
     /** 获取当前用户的所有对话（按更新时间倒序） */
     @GetMapping
-    public Result<List<Conversation>> list(
-            @RequestHeader(value = "Authorization", required = false) String auth) {
-        Long userId = AuthController.getUserIdFromToken(extractToken(auth));
+    public Result<List<Conversation>> list() {
+        Long userId = CurrentUser.id();
         if (userId == null) return Result.error(401, "未登录");
 
         List<Conversation> conversations = conversationMapper.selectList(
@@ -42,9 +42,8 @@ public class ConversationController {
     /** 获取指定对话的全部消息 */
     @GetMapping("/{id}/messages")
     public Result<List<ChatMessage>> messages(
-            @PathVariable Long id,
-            @RequestHeader(value = "Authorization", required = false) String auth) {
-        Long userId = AuthController.getUserIdFromToken(extractToken(auth));
+            @PathVariable Long id) {
+        Long userId = CurrentUser.id();
         if (userId == null) return Result.error(401, "未登录");
 
         Conversation conv = conversationMapper.selectById(id);
@@ -62,9 +61,8 @@ public class ConversationController {
     /** 删除对话（软删除） */
     @DeleteMapping("/{id}")
     public Result<Void> delete(
-            @PathVariable Long id,
-            @RequestHeader(value = "Authorization", required = false) String auth) {
-        Long userId = AuthController.getUserIdFromToken(extractToken(auth));
+            @PathVariable Long id) {
+        Long userId = CurrentUser.id();
         if (userId == null) return Result.error(401, "未登录");
 
         Conversation conv = conversationMapper.selectById(id);
@@ -82,9 +80,8 @@ public class ConversationController {
     @PutMapping("/{id}/title")
     public Result<Void> rename(
             @PathVariable Long id,
-            @RequestBody Map<String, String> body,
-            @RequestHeader(value = "Authorization", required = false) String auth) {
-        Long userId = AuthController.getUserIdFromToken(extractToken(auth));
+            @RequestBody Map<String, String> body) {
+        Long userId = CurrentUser.id();
         if (userId == null) return Result.error(401, "未登录");
 
         Conversation conv = conversationMapper.selectById(id);
@@ -108,9 +105,8 @@ public class ConversationController {
     public Result<List<Map<String, Object>>> search(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String startDate,
-            @RequestParam(required = false) String endDate,
-            @RequestHeader(value = "Authorization", required = false) String auth) {
-        Long userId = AuthController.getUserIdFromToken(extractToken(auth));
+            @RequestParam(required = false) String endDate) {
+        Long userId = CurrentUser.id();
         if (userId == null) return Result.error(401, "未登录");
 
         boolean hasKeyword = keyword != null && !keyword.isBlank();
@@ -198,12 +194,5 @@ public class ConversationController {
         }
 
         return Result.success(results);
-    }
-
-    private String extractToken(String auth) {
-        if (auth != null && auth.startsWith("Bearer ")) {
-            return auth.substring(7);
-        }
-        return null;
     }
 }

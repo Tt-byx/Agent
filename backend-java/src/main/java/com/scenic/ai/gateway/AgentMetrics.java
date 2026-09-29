@@ -76,6 +76,22 @@ public class AgentMetrics {
         }
     }
 
+    /**
+     * Wave 1 · 熔断跳过：该 route 处于 OPEN 或半开限流状态，本次请求**根本没有调用它**。
+     * 这个指标是判断「熔断是否真的生效」的抓手 —— 若它恒为 0，说明熔断形同虚设。
+     */
+    public void routeSkipped(String route) {
+        registry.counter("scenic.llm.route.calls", "route", route, "result", "skipped").increment();
+    }
+
+    /**
+     * Wave 1 · 降级打点：记录「优雅降级」发生的次数，让静默兜底变得可观测。
+     * type 取值：cache / memory / retrieval / rerank / tool / model / model_all_failed
+     */
+    public void degrade(String type) {
+        registry.counter("scenic.degrade", "type", type).increment();
+    }
+
     public void runStarted() {
         agentRuns.increment();
     }

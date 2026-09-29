@@ -51,7 +51,20 @@ llm:
   # max-tokens 给小了会导致推理吃光额度、正式回答为空，故必须给足。
   max-tokens: 4096
   timeout-seconds: 120
-  max-retries: 2
+  # Wave 1：关闭 LangChain4j 内置的「无差别重试」，改由 RetryPolicy 按错误类型分级重试
+  max-retries: 0
+  # Wave 1 · 分级重试：只重试 429/5xx/超时；指数退避 + 全抖动
+  retry:
+    max-attempts: 3
+    base-backoff-ms: 500
+    max-backoff-ms: 5000
+  # Wave 1 · 熔断：主备各自独立窗口；打开后请求直接跳过该候选，避免故障放大
+  circuit-breaker:
+    sliding-window-size: 10
+    minimum-number-of-calls: 5
+    failure-rate-threshold: 50
+    wait-duration-seconds: 30
+    half-open-calls: 2
   # P8 · 备用模型（同厂商双档降级）：主模型 deepseek-flash 异常时自动切 deepseek-v4-pro。
   # 注意：硅基流动的 key 只用于 embedding 与 rerank，不做对话模型。
   fallback:
@@ -114,6 +127,12 @@ mcp:
 agent:
   # 最大执行步数：防止模型反复调工具陷入死循环
   max-steps: 6
+  # Wave 1 · 单步工具调用上限（超出部分不执行，以失败文本回灌给模型）
+  max-tools-per-step: 4
+  # Wave 1 · 单个工具的超时与有限重试
+  tool:
+    timeout-ms: 15000
+    max-attempts: 2
   # 整轮任务的整体超时（秒）
   timeout-seconds: 120
   system-prompt: prompts/scenic-agent-system.txt
