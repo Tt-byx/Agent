@@ -6,9 +6,12 @@ import com.scenic.ai.rag.ingest.DocumentIngestionService;
 import com.scenic.ai.rag.ingest.DocumentTextExtractor;
 import com.scenic.ai.rag.retrieve.Bm25Index;
 import com.scenic.ai.rag.retrieve.RagRetriever;
+import com.scenic.ai.rag.store.VectorStoreAdmin;
+import com.scenic.ai.service.KnowledgeDocService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,15 +20,21 @@ import org.springframework.web.bind.annotation.RestController;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * RAG 知识库运维接口（P3 新增）。
+ * RAG 知识库运维接口（P3 新增，Wave 2 加固）。
  *
- * 用于把赛题资料包导入 pgvector，以及直接观察检索结果，方便做检索质量验证（P4 评测集也基于此）。
- * 注意：这是开发/运维用途的接口，上线前应加权限控制。
+ * 用于把赛题资料包导入 pgvector，以及直接观察检索结果（P4 评测集也基于此）。
+ *
+ * Wave 2 变化：
+ *   1. 导入的两条路径统一 docId 规则（修 B7，见 {@link KnowledgeDocService#resolveDocIdByPath}）；
+ *   2. 新增 {@code /reconcile} 对账接口，比对业务表 chunk 数与向量库实际条数。
+ *
+ * 权限：由 {@code SecurityConfig} 统一要求 ROLE_ADMIN（Wave 0 之前这里是裸奔的）。
  */
 @RestController
 @RequestMapping("/api/rag")
@@ -43,6 +52,12 @@ public class RagAdminController {
 
     @Autowired
     private RagEvalRunner evalRunner;
+
+    @Autowired
+    private KnowledgeDocService knowledgeDocService;
+
+    @Autowired
+    private VectorStoreAdmin vectorStoreAdmin;
 
     @Value("${scenic.upload.dir:D:/scenic_uploads}")
     private String uploadDir;
@@ -62,8 +77,13 @@ public class RagAdminController {
                     + "，支持 " + DocumentTextExtractor.SUPPORTED_TYPES);
         }
         try {
+            // Wave 2 · B7：未显式指定 docId 时，先登记到业务表再取主键 ——
+            // 与 /api/knowledge/upload 路径共用同一套 ID 规则（原先用路径 hash，会产生两套向量）
+            Long effectiveDocId = docId != null
+                    ? docId
+                    : knowledgeDocService.resolveDocIdByPath(file, title);
             var result = ingestionService.ingest(
-                    docId != null ? docId : stableId(file),
+                    effectiveDocId,
                     title != null ? title : file.getFileName().toString(),
                     file, type);
             return Result.success(result);
@@ -91,8 +111,11 @@ public class RagAdminController {
 
             for (Path file : files) {
                 try {
+                    // Wave 2 · B7：统一走业务表 docId
+                    Long registeredId = knowledgeDocService.resolveDocIdByPath(
+                            file, file.getFileName().toString());
                     results.add(ingestionService.ingest(
-                            stableId(file), file.getFileName().toString(), file, extension(file)));
+                            registeredId, file.getFileName().toString(), file, extension(file)));
                 } catch (Exception e) {
                     log.error("文件导入失败: {}", file, e);
                     results.add(Map.of(
@@ -116,6 +139,60 @@ public class RagAdminController {
         return Result.success(ragRetriever.retrieve(query));
     }
 
+    /**
+     * Wave 2 · 对账：比对「业务表记录的 chunkCount」与「向量库按 doc_id 的实际条数」。
+     *
+     * 存在的意义：入库已改成「先写新后删旧 + 补偿回滚」，但跨库（MySQL + PostgreSQL）
+     * 无法使用本地事务，残留的不一致必须靠**对账**发现 —— 典型症状是
+     * 「向量写入失败但业务表已标记完成」或「旧向量清理失败导致条数偏多」。
+     */
+    @GetMapping("/reconcile")
+    public Result<?> reconcile() {
+        if (!vectorStoreAdmin.isReachable()) {
+            // 向量库没起时给明确结论，而不是抛异常变成 500
+            return Result.success(Map.of(
+                    "vectorStoreReachable", false,
+                    "message", "向量库不可达（pgvector 未启动？），无法对账"));
+        }
+
+        List<com.scenic.ai.entity.KnowledgeDoc> docs = knowledgeDocService.listAll();
+        Map<Long, Long> vectorCounts = vectorStoreAdmin.countByDocId();
+
+        List<Map<String, Object>> mismatches = new ArrayList<>();
+        int consistent = 0;
+        for (com.scenic.ai.entity.KnowledgeDoc doc : docs) {
+            // 只对「已向量化」（vectorStatus=2）的文档要求条数一致
+            if (doc.getVectorStatus() == null || doc.getVectorStatus() != 2) {
+                continue;
+            }
+            long expected = doc.getChunkCount() == null ? 0 : doc.getChunkCount();
+            long actual = vectorCounts.getOrDefault(doc.getId(), 0L);
+            if (expected == actual) {
+                consistent++;
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("docId", doc.getId());
+            item.put("title", doc.getTitle());
+            item.put("expectedChunks", expected);
+            item.put("actualVectors", actual);
+            item.put("action", actual == 0
+                    ? "向量缺失：需要重新处理（POST /api/knowledge/reprocess/{id}）"
+                    : (actual > expected ? "向量偏多（旧向量未清理）：重跑一次导入即可自愈" : "向量偏少：重新处理"));
+            mismatches.add(item);
+        }
+
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("vectorStoreReachable", vectorStoreAdmin.isReachable());
+        report.put("totalVectorsInStore", vectorStoreAdmin.countAll());
+        report.put("documentsChecked", consistent + mismatches.size());
+        report.put("documentsConsistent", consistent);
+        report.put("documentsMismatched", mismatches.size());
+        report.put("mismatches", mismatches);
+        log.info("[RECONCILE] 对账完成：一致 {} 篇，不一致 {} 篇", consistent, mismatches.size());
+        return Result.success(report);
+    }
+
     /** 重建 BM25 关键词索引（文档增删后调用） */
     @PostMapping("/reload-index")
     public Result<?> reloadIndex() {
@@ -133,10 +210,5 @@ public class RagAdminController {
         String name = path.getFileName().toString();
         int dot = name.lastIndexOf('.');
         return dot < 0 ? "" : name.substring(dot + 1).toLowerCase();
-    }
-
-    /** 用文件路径生成稳定的 docId，保证重复导入落到同一条文档上 */
-    private long stableId(Path path) {
-        return Math.abs((long) path.toAbsolutePath().normalize().toString().hashCode());
     }
 }

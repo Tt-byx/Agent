@@ -70,6 +70,12 @@ public class RoutedChatModel implements ChatModel {
                     long costMillis = System.currentTimeMillis() - start;
                     route.circuitBreaker().onSuccess(costMillis, TimeUnit.MILLISECONDS);
                     metrics.routeSucceeded(route.name(), costMillis);
+                    // Wave 3 · token 计数放在这里而不是 AgentLoop：只有路由层知道
+                    // 这次回答实际由哪个候选产出，成本才能按模型（flash / pro）归因
+                    if (response.tokenUsage() != null) {
+                        metrics.tokens(response.tokenUsage().inputTokenCount(),
+                                response.tokenUsage().outputTokenCount(), route.name());
+                    }
                     if (attempt > 1) {
                         log.info("[ROUTE] {} 第 {} 次尝试成功（此前失败 {} 次）",
                                 route.name(), attempt, attempt - 1);

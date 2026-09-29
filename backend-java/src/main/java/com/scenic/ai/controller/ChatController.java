@@ -31,11 +31,11 @@ public class ChatController {
     @PostMapping
     public Result<ChatResponse> chat(@RequestBody @Valid ChatRequest request,
                                      HttpServletRequest httpRequest) {
-        String key = (request.getVisitorId() != null && !request.getVisitorId().isBlank())
-                ? request.getVisitorId()
-                : clientIp(httpRequest);
+        boolean byVisitor = request.getVisitorId() != null && !request.getVisitorId().isBlank();
+        String key = byVisitor ? request.getVisitorId() : clientIp(httpRequest);
 
-        if (!rateLimiter.allow(key)) {
+        // Wave 3：带上维度标签，指标能区分「按身份限流」还是「按 IP 限流」
+        if (!rateLimiter.allow(key, byVisitor ? "visitor" : "ip")) {
             log.info("[RATE] 拒绝请求：key={}", key);
             return Result.error(429, "您的提问有点太频繁了，请休息一下再问～");
         }

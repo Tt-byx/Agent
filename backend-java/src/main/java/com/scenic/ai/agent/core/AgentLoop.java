@@ -140,23 +140,24 @@ public class AgentLoop {
             }
 
             AiMessage aiMessage;
+            long modelStart = System.currentTimeMillis();
             try {
                 ChatResponse response = chatModel.chat(ChatRequest.builder()
                         .messages(messages)
                         .toolSpecifications(agentToolbox.specifications())
                         .build());
                 aiMessage = response.aiMessage();
-                // token 用量：P8 成本核算的基础
-                if (response.tokenUsage() != null) {
-                    metrics.tokens(response.tokenUsage().inputTokenCount(),
-                            response.tokenUsage().outputTokenCount());
-                }
+                // Wave 3：token 计数已下移到 RoutedChatModel —— 只有路由层知道本次回答
+                // 实际由哪个候选产出，成本才能按模型（flash / pro）归因
             } catch (Exception e) {
+                metrics.agentStep(step, "model", System.currentTimeMillis() - modelStart);
                 log.error("Agent 第 {} 步模型调用失败: {}", step, e.getMessage(), e);
                 metrics.runAborted();
                 metrics.degrade("model");
                 return new Result(MODEL_ERROR_ANSWER, trace, step - 1, false, "MODEL_ERROR");
             }
+            // Wave 3 · 单步耗时：回答「整轮延迟耗在哪一步、是模型慢还是工具慢」
+            metrics.agentStep(step, "model", System.currentTimeMillis() - modelStart);
             messages.add(aiMessage);
 
             // 终止条件：模型不再请求工具，说明它认为可以作答了
@@ -186,7 +187,7 @@ public class AgentLoop {
                     ToolExecutionRequest request = requests.get(i);
 
                     if (i >= maxToolsPerStep) {
-                        metrics.toolFailed();
+                        metrics.toolFailed(request.name());
                         String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
                                 + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
                         trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
@@ -194,11 +195,14 @@ public class AgentLoop {
                         continue;
                     }
 
-                    metrics.toolCalled();
+                    // Wave 3：工具指标带工具名，并记录单步耗时（phase=tool）
+                    metrics.toolCalled(request.name());
+                    long toolStart = System.currentTimeMillis();
                     String observation = agentToolbox.execute(request, sessionId);
+                    metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
                     boolean failed = observation.contains("执行失败：");
                     if (failed) {
-                        metrics.toolFailed();
+                        metrics.toolFailed(request.name());
                     }
                     trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
                     messages.add(ToolExecutionResultMessage.from(request, observation));

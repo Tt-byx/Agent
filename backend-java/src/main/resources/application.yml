@@ -185,6 +185,10 @@ websocket:
 logging:
   level:
     com.scenic.ai: debug
+  pattern:
+    # Wave 3 · 每行日志带上 traceId（由 TraceIdFilter 写入 MDC）：
+    # 一次请求跨 Controller→ChatService→AgentLoop→Toolbox→Model 的日志从此可以串联排查
+    console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{36} - %msg%n"
 
 # 文件上传目录
 scenic:

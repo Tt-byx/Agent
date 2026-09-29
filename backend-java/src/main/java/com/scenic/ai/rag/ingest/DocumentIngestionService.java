@@ -1,6 +1,8 @@
 package com.scenic.ai.rag.ingest;
 
+import com.scenic.ai.gateway.AgentMetrics;
 import com.scenic.ai.rag.retrieve.Bm25Index;
+import com.scenic.ai.rag.store.VectorStoreAdmin;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -14,15 +16,27 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiConsumer;
-
-import static dev.langchain4j.store.embedding.filter.MetadataFilterBuilder.metadataKey;
 
 /**
  * 文档导入：解析 → 切分 → 向量化 → 入 pgvector。
  *
- * 对应 Python 侧 {@code document_parser + text_chunker + embedding_service + vector_store}
- * 四段串联。重复导入同一 docId 会先清旧向量，保证幂等。
+ * Wave 2 · 修 B2：**从「先删后写」改为「先写新、后删旧」**。
+ *
+ * 原实现是 `removeByDocId` → `embedAll` → `addAll`，中间任何一步失败都会让**旧数据已删、新数据没进**，
+ * 且不可逆。这里把顺序重排为：
+ *
+ *   ① embedding（远程调用，最易失败）—— 失败时旧数据完好无损
+ *   ② 快照旧向量 ID（PG 直连查询）
+ *   ③ 写入新向量 —— 失败则回滚本次残留，仍保持「只有旧数据」
+ *   ④ 精确删除旧 ID 对应的向量 —— 失败也不抛（最坏是检索结果短暂重复，重跑一次即自愈）
+ *   ⑤ 重建关键词索引
+ *
+ * 为什么不上分布式事务：业务表在 MySQL、向量在 PostgreSQL，**跨库本地事务不成立**；
+ * 为一次导入引入 Seata 这类 2PC 组件，代价远大于收益。这里用
+ * 「顺序重排 + 补偿回滚 + 对账兜底（{@code /api/rag/reconcile}）」三层替代，
+ * 把「不可逆丢数据」降级为「可自愈的重复」。
  */
 @Service
 @Slf4j
@@ -33,17 +47,23 @@ public class DocumentIngestionService {
     private final ObjectProvider<EmbeddingStore<TextSegment>> storeProvider;
     private final EmbeddingModel embeddingModel;
     private final Bm25Index bm25Index;
+    private final VectorStoreAdmin vectorStoreAdmin;
+    private final AgentMetrics metrics;
 
     public DocumentIngestionService(DocumentTextExtractor extractor,
                                     DocumentChunker chunker,
                                     ObjectProvider<EmbeddingStore<TextSegment>> storeProvider,
                                     EmbeddingModel embeddingModel,
-                                    Bm25Index bm25Index) {
+                                    Bm25Index bm25Index,
+                                    VectorStoreAdmin vectorStoreAdmin,
+                                    AgentMetrics metrics) {
         this.extractor = extractor;
         this.chunker = chunker;
         this.storeProvider = storeProvider;
         this.embeddingModel = embeddingModel;
         this.bm25Index = bm25Index;
+        this.vectorStoreAdmin = vectorStoreAdmin;
+        this.metrics = metrics;
     }
 
     /** 导入结果 */
@@ -72,12 +92,9 @@ public class DocumentIngestionService {
 
         EmbeddingStore<TextSegment> store = storeProvider.getObject();
 
-        // 幂等：先清掉该文档的旧向量
-        removeByDocId(docId);
-
         List<TextSegment> segments = new ArrayList<>(chunks.size());
         for (DocumentChunker.Chunk chunk : chunks) {
-            Metadata metadata = Metadata.from(java.util.Map.of(
+            Metadata metadata = Metadata.from(Map.of(
                     "doc_id", String.valueOf(docId),
                     "doc_title", docTitle == null ? "" : docTitle,
                     "chunk_index", String.valueOf(chunk.index())
@@ -85,17 +102,31 @@ public class DocumentIngestionService {
             segments.add(TextSegment.from(chunk.text(), metadata));
         }
 
+        // ① 先做最可能失败的远程调用；这一步抛出时，库里旧向量完全没被碰过
         report(onProgress, "embedding", 50);
         List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
 
-        report(onProgress, "storing", 85);
-        store.addAll(embeddings, segments);
+        // ② 写入前快照旧向量 ID（用于写入成功后精确删除）
+        List<String> oldEmbeddingIds = vectorStoreAdmin.findEmbeddingIds(docId);
 
-        // 向量库变了，关键词索引必须同步重建，否则 BM25 那一路检索不到新文档
+        // ③ 写入新向量
+        report(onProgress, "storing", 85);
+        try {
+            store.addAll(embeddings, segments);
+        } catch (Exception e) {
+            rollbackPartialWrite(store, docId, oldEmbeddingIds);
+            throw new IOException("向量写入失败：" + e.getMessage(), e);
+        }
+
+        // ④ 新数据就位后才删旧数据
+        removeOldEmbeddings(store, docId, oldEmbeddingIds);
+
+        // ⑤ 向量库变了，关键词索引必须同步重建，否则 BM25 那一路检索不到新文档
         bm25Index.reload();
 
         report(onProgress, "completed", 100);
-        log.info("文档 '{}' (id={}) 入库完成：{} 个 chunk", docTitle, docId, segments.size());
+        log.info("文档 '{}' (id={}) 入库完成：{} 个 chunk（旧向量 {} 条）",
+                docTitle, docId, segments.size(), oldEmbeddingIds.size());
         return new IngestResult(docId, docTitle, segments.size(), text.length());
     }
 
@@ -103,6 +134,47 @@ public class DocumentIngestionService {
     public void deleteDocument(Long docId) {
         removeByDocId(docId);
         bm25Index.reload();
+    }
+
+    /**
+     * 写入失败时的补偿：删除本次已写入的残留
+     * （= 当前该文档的向量中不属于旧快照的部分），让系统回到「只有旧数据」的一致状态。
+     */
+    private void rollbackPartialWrite(EmbeddingStore<TextSegment> store, Long docId,
+                                      List<String> oldEmbeddingIds) {
+        metrics.degrade("ingest_write");
+        List<String> current = vectorStoreAdmin.findEmbeddingIds(docId);
+        current.removeAll(oldEmbeddingIds);
+        if (current.isEmpty()) {
+            return;
+        }
+        try {
+            store.removeAll(current);
+            log.warn("文档 {} 写入失败，已回滚本次写入的 {} 条残留向量（旧数据保持不变）",
+                    docId, current.size());
+        } catch (Exception e) {
+            log.error("文档 {} 的残留向量回滚失败，需通过 /api/rag/reconcile 对账后重跑导入", docId, e);
+        }
+    }
+
+    /**
+     * 删除旧向量。
+     * **失败不抛**：此时新向量已就位，最坏结果是「新旧共存导致检索结果重复」——
+     * 属于可自愈状态（重跑一次导入即可），远比「删了没写」安全。
+     */
+    private void removeOldEmbeddings(EmbeddingStore<TextSegment> store, Long docId,
+                                     List<String> oldEmbeddingIds) {
+        if (oldEmbeddingIds.isEmpty()) {
+            return;
+        }
+        try {
+            store.removeAll(oldEmbeddingIds);
+            log.info("已清理文档 id={} 的 {} 条旧向量", docId, oldEmbeddingIds.size());
+        } catch (Exception e) {
+            metrics.degrade("ingest_cleanup");
+            log.warn("文档 {} 的旧向量清理失败（新旧共存，重跑一次导入即可自愈）: {}",
+                    docId, e.getMessage());
+        }
     }
 
     private void report(BiConsumer<String, Integer> onProgress, String stage, int percent) {
@@ -120,7 +192,8 @@ public class DocumentIngestionService {
     public void removeByDocId(Long docId) {
         try {
             storeProvider.getObject().removeAll(
-                    metadataKey("doc_id").isEqualTo(String.valueOf(docId)));
+                    dev.langchain4j.store.embedding.filter.MetadataFilterBuilder
+                            .metadataKey("doc_id").isEqualTo(String.valueOf(docId)));
             log.info("已清除文档 id={} 的旧向量", docId);
         } catch (Exception e) {
             // 清旧失败通常意味着本来就没有（或向量库未就绪），不阻断导入

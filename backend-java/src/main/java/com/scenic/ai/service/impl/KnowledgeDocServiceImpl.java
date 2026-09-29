@@ -119,6 +119,54 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         }
     }
 
+    /**
+     * Wave 2 · B7：按「路径 → 业务表记录」解析 docId，未登记过则先登记。
+     *
+     * 匹配顺序（务实地兼容历史数据两种存法）：
+     *   1. 按 fileUrl 精确匹配 —— 后台上传存的原始路径；
+     *   2. 按 fileName 匹配 —— 同一份资料以不同路径/不同机器出现时；
+     *   3. 都没命中 → 新建记录（vectorStatus=0），返回其自增主键。
+     */
+    @Override
+    public Long resolveDocIdByPath(Path file, String title) {
+        String absolutePath = file.toAbsolutePath().normalize().toString();
+        String fileName = file.getFileName().toString();
+
+        KnowledgeDoc existing = knowledgeDocMapper.selectOne(
+                new LambdaQueryWrapper<KnowledgeDoc>()
+                        .eq(KnowledgeDoc::getStatus, 1)
+                        .and(q -> q.eq(KnowledgeDoc::getFileUrl, absolutePath)
+                                .or().eq(KnowledgeDoc::getFileUrl, file.toString()))
+                        .last("LIMIT 1"));
+        if (existing == null) {
+            existing = knowledgeDocMapper.selectOne(
+                    new LambdaQueryWrapper<KnowledgeDoc>()
+                            .eq(KnowledgeDoc::getStatus, 1)
+                            .eq(KnowledgeDoc::getFileName, fileName)
+                            .last("LIMIT 1"));
+        }
+        if (existing != null) {
+            log.info("[DOC-REGISTRY] 路径 {} 已登记为 docId={}", fileName, existing.getId());
+            return existing.getId();
+        }
+
+        KnowledgeDoc doc = new KnowledgeDoc();
+        doc.setTitle(title != null && !title.isBlank() ? title : fileName);
+        doc.setFileName(fileName);
+        doc.setFileUrl(absolutePath);
+        doc.setFileType(getFileExtension(fileName));
+        doc.setCategory("未分类");
+        doc.setScenicArea("");
+        doc.setVectorStatus(0);
+        doc.setProcessProgress(0);
+        doc.setStatus(1);
+        doc.setCreatedAt(LocalDateTime.now());
+        doc.setUpdatedAt(LocalDateTime.now());
+        knowledgeDocMapper.insert(doc);
+        log.info("[DOC-REGISTRY] 路径 {} 为新文档，已登记 docId={}", fileName, doc.getId());
+        return doc.getId();
+    }
+
     @Override
     public List<KnowledgeDoc> listAll() {
         return knowledgeDocMapper.selectList(

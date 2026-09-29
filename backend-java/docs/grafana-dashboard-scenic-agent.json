@@ -1,59 +1,143 @@
 {
-  "title": "灵山胜境 Agent 运行观测（P8）",
+  "title": "灵山胜境 Agent 运行观测（P8 → Wave 3 可观测补全）",
   "uid": "scenic-agent-p8",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Agent 总执行次数",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
-      "targets": [{ "expr": "sum(scenic_agent_runs_total)", "refId": "A" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(scenic_agent_runs_total)",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 2,
       "type": "stat",
       "title": "强制收口次数（步数上限/超时）",
       "description": "应为 0 或极低，否则说明 Agent 自主性失控",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-      "targets": [{ "expr": "sum(scenic_agent_runs_aborted_total)", "refId": "A" }],
-      "fieldConfig": { "defaults": { "thresholds": { "steps": [
-        { "color": "green", "value": null }, { "color": "red", "value": 1 }
-      ] } } }
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(scenic_agent_runs_aborted_total)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "id": 3,
       "type": "stat",
       "title": "语义缓存命中率",
       "description": "命中即不调用模型，边际成本为 0",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
-      "targets": [{
-        "expr": "sum(scenic_cache_hits_total) / (sum(scenic_cache_hits_total) + sum(scenic_cache_misses_total)) * 100",
-        "refId": "A"
-      }],
-      "fieldConfig": { "defaults": { "unit": "percent", "thresholds": { "steps": [
-        { "color": "red", "value": null }, { "color": "yellow", "value": 30 }, { "color": "green", "value": 60 }
-      ] } } }
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(scenic_cache_hits_total) / (sum(scenic_cache_hits_total) + sum(scenic_cache_misses_total)) * 100",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "id": 4,
       "type": "stat",
       "title": "工具调用失败次数",
       "description": "失败会被回灌给模型自纠，但仍需关注稳定性",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-      "targets": [{ "expr": "sum(scenic_agent_tool_failures_total)", "refId": "A" }]
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(scenic_agent_tool_failures_total)",
+          "refId": "A"
+        }
+      ]
     },
     {
       "id": 5,
       "type": "stat",
       "title": "输入 / 输出 token",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
       "targets": [
-        { "expr": "sum(scenic_llm_tokens_input_total)", "refId": "A", "legendFormat": "input" },
-        { "expr": "sum(scenic_llm_tokens_output_total)", "refId": "B", "legendFormat": "output" }
+        {
+          "expr": "sum(scenic_llm_tokens_input_total)",
+          "refId": "A",
+          "legendFormat": "input"
+        },
+        {
+          "expr": "sum(scenic_llm_tokens_output_total)",
+          "refId": "B",
+          "legendFormat": "output"
+        }
       ]
     },
     {
@@ -61,40 +145,376 @@
       "type": "timeseries",
       "title": "主/备模型调用情况（P8 多模型路由）",
       "description": "主模型失败而备模型成功 = 发生过降级；备模型持续承压说明主模型有问题",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
       "targets": [
-        { "expr": "sum by (route, result) (rate(scenic_llm_route_calls_total[5m]))", "refId": "A", "legendFormat": "{{route}} {{result}}" }
+        {
+          "expr": "sum by (route, result) (rate(scenic_llm_route_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "{{route}} {{result}}"
+        }
       ]
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "模型调用耗时分布（P95 看瓶颈）",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
       "targets": [
-        { "expr": "sum by (route) (rate(scenic_llm_route_duration_seconds_sum[5m])) / sum by (route) (rate(scenic_llm_route_duration_seconds_count[5m]))", "refId": "A", "legendFormat": "{{route}} 平均" },
-        { "expr": "scenic_llm_route_duration_seconds_max", "refId": "B", "legendFormat": "{{route}} 最大" }
+        {
+          "expr": "sum by (route) (rate(scenic_llm_route_duration_seconds_sum[5m])) / sum by (route) (rate(scenic_llm_route_duration_seconds_count[5m]))",
+          "refId": "A",
+          "legendFormat": "{{route}} 平均"
+        },
+        {
+          "expr": "scenic_llm_route_duration_seconds_max",
+          "refId": "B",
+          "legendFormat": "{{route}} 最大"
+        }
       ]
     },
     {
       "id": 8,
       "type": "timeseries",
       "title": "缓存命中 / 未命中（速率）",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "targets": [
-        { "expr": "sum(rate(scenic_cache_hits_total[5m]))", "refId": "A", "legendFormat": "命中" },
-        { "expr": "sum(rate(scenic_cache_misses_total[5m]))", "refId": "B", "legendFormat": "未命中" }
+        {
+          "expr": "sum(rate(scenic_cache_hits_total[5m]))",
+          "refId": "A",
+          "legendFormat": "命中"
+        },
+        {
+          "expr": "sum(rate(scenic_cache_misses_total[5m]))",
+          "refId": "B",
+          "legendFormat": "未命中"
+        }
       ]
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Agent 工具调用（含失败）",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "targets": [
-        { "expr": "sum(rate(scenic_agent_tool_calls_total[5m]))", "refId": "A", "legendFormat": "调用" },
-        { "expr": "sum(rate(scenic_agent_tool_failures_total[5m]))", "refId": "B", "legendFormat": "失败" }
+        {
+          "expr": "sum(rate(scenic_agent_tool_calls_total[5m]))",
+          "refId": "A",
+          "legendFormat": "调用"
+        },
+        {
+          "expr": "sum(rate(scenic_agent_tool_failures_total[5m]))",
+          "refId": "B",
+          "legendFormat": "失败"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "主备模型路由与熔断（Wave 1/3）",
+      "description": "result=skipped 表示候选被熔断跳过（请求根本没打到它）。该曲线恒为 0 说明熔断没生效。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route, result) (rate(scenic_llm_route_calls_total[5m]))",
+          "legendFormat": "{{route}} / {{result}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "优雅降级分布（Wave 1/3）",
+      "description": "cache/memory/retrieval/rerank/tool/model/model_all_failed/ingest_write/ingest_cleanup —— 让静默兜底可见。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (type) (rate(scenic_degrade_total[5m]))",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "请求级延迟 P50 / P95 / P99（SLO：P99 < 3s）",
+      "description": "标签 uri 使用路由模板而非原始路径，避免标签基数爆炸。红色阈值线 = SLO 3s。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1.5
+              },
+              {
+                "color": "red",
+                "value": 3.0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(scenic_http_server_requests_seconds_bucket[5m])))",
+          "legendFormat": "P99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(scenic_http_server_requests_seconds_bucket[5m])))",
+          "legendFormat": "P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(scenic_http_server_requests_seconds_bucket[5m])))",
+          "legendFormat": "P50"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Agent 单步耗时 P95（模型 vs 工具）",
+      "description": "回答「整轮延迟耗在哪一步、是模型慢还是工具慢」。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(scenic_agent_step_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{phase}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "token 消耗按模型归因（Wave 3）",
+      "description": "flash 与 pro 单价不同：降级到 pro 时成本会上升，这条曲线让「降级的代价」可量化。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(scenic_llm_tokens_input_total[5m]))",
+          "legendFormat": "{{route}} 输入"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (route) (rate(scenic_llm_tokens_output_total[5m]))",
+          "legendFormat": "{{route}} 输出"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "限流拒绝量（Wave 3）",
+      "description": "判断限流阈值是保护了系统还是误伤了正常用户（visitor 维度 vs ip 维度）。",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "datasource": null,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (dimension) (rate(scenic_rate_limit_rejected_total[5m]))",
+          "legendFormat": "{{dimension}}"
+        }
       ]
     }
   ]

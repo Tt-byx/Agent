@@ -108,8 +108,22 @@ public class ChatServiceImpl implements ChatService {
         // Wave 0 · 修 B8：REST 链路原先不回填 userId，导致会话在「我的会话」里查不到
         conversation.setUserId(userId);
         conversation.setTitle(message.substring(0, Math.min(20, message.length())));
-        conversationMapper.insert(conversation);
-        return conversation.getId();
+        try {
+            conversationMapper.insert(conversation);
+            return conversation.getId();
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // Wave 2 · B9：并发下两个请求可能同时判定「会话不存在」而各自创建。
+            // 表上已有唯一索引 uk_session_id 兜底，这里让冲突方**复用已存在的会话**，
+            // 而不是把 500 抛给游客（原实现就是后者）。
+            Conversation existing = conversationMapper.selectOne(
+                    new LambdaQueryWrapper<Conversation>().eq(Conversation::getSessionId, sessionId));
+            if (existing == null) {
+                throw e;
+            }
+            log.info("[CONVERSATION] session_id={} 并发创建冲突，复用已存在会话 id={}",
+                    sessionId, existing.getId());
+            return existing.getId();
+        }
     }
 
     /**

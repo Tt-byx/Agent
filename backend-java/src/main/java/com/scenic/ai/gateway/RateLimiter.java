@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 
 /**
- * P8 · 限流（Redis 固定窗口计数）。
+ * 限流（Redis 固定窗口计数）。
  *
  * 为什么自己写而不是上 Bucket4j / Resilience4j：
  *   这里要限的是「每个游客的模型调用频次」，维度是业务身份（visitorId），
@@ -16,6 +16,9 @@ import java.time.Duration;
  *
  * 窗口按分钟切（key 里带时间片），Redis 计数 + 短 TTL 自动过期。
  * **Redis 挂了直接放行**：限流是保护措施，不能反过来把服务打死。
+ *
+ * Wave 3：补上 `scenic.rate_limit.rejected{dimension}` 指标 —— 被挡掉多少请求必须可见，
+ * 否则无法判断「限流阈值是保护了系统还是误伤了正常用户」。
  */
 @Component
 @Slf4j
@@ -24,22 +27,31 @@ public class RateLimiter {
     private static final long WINDOW_MILLIS = 60_000L;
 
     private final StringRedisTemplate redis;
+    private final AgentMetrics metrics;
     private final boolean enabled;
     private final int limitPerMinute;
 
     public RateLimiter(StringRedisTemplate redis,
+                       AgentMetrics metrics,
                        @Value("${gateway.rate-limit.enabled:true}") boolean enabled,
                        @Value("${gateway.rate-limit.per-minute:20}") int limitPerMinute) {
         this.redis = redis;
+        this.metrics = metrics;
         this.enabled = enabled;
         this.limitPerMinute = Math.max(limitPerMinute, 1);
         log.info("限流就绪：enabled={}, 每分钟 {} 次", enabled, limitPerMinute);
     }
 
+    public boolean allow(String key) {
+        return allow(key, "unknown");
+    }
+
     /**
+     * @param key       限流维度标识（visitorId 或客户端 IP）
+     * @param dimension 维度类型，仅用于指标标签：visitor / ip
      * @return true = 放行，false = 超出配额
      */
-    public boolean allow(String key) {
+    public boolean allow(String key, String dimension) {
         if (!enabled || key == null || key.isBlank()) {
             return true;
         }
@@ -51,7 +63,9 @@ public class RateLimiter {
             }
             boolean allowed = count != null && count <= limitPerMinute;
             if (!allowed) {
-                log.warn("[RATE] 已限流：key={}，本分钟第 {} 次（上限 {}）", key, count, limitPerMinute);
+                metrics.rateLimitRejected(dimension);
+                log.warn("[RATE] 已限流：{}={}，本分钟第 {} 次（上限 {}）",
+                        dimension, key, count, limitPerMinute);
             }
             return allowed;
         } catch (Exception e) {
