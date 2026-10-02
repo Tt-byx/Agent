@@ -1,20 +1,31 @@
-# Wave 6 · 一键起环境（替代此前的手工 docker run）
+# Docker 启动配置（Wave 6 建立，2026-10-02 按本机实际情况校正）
 #
-# 用法：
-#   只起中间件（推荐开发时用，应用在宿主机跑 mvn spring-boot:run）：
-#       docker compose up -d mysql pgvector redis
-#   连应用一起起（需要先 mvn package 或让 compose 构建）：
-#       docker compose --profile full up -d
+# ─────────────────────────── 怎么用（重要） ───────────────────────────
 #
-# 与 application.yml 的对应关系：
-#   MySQL      localhost:3306  scenic_ai        root/<SCENIC_MYSQL_PASSWORD|123456>
-#   pgvector   localhost:5432  scenic_vectors   postgres/<SCENIC_PG_PASSWORD|postgres>
-#   Redis      localhost:6379
+# 场景 A · 本机开发（推荐，也是你现在的情况）
+#   你机器上 MySQL 是**宿主机安装**的（Windows 服务 MySQL96），pgvector 与 Redis 已在容器里跑。
+#   所以日常**只需要确认这两个容器是活的**：
+#       docker ps --filter name=pgvector --filter name=scenic-redis
+#   应用不要放进容器 —— 在 IDE 里直接跑，改完代码几秒就能重启，比重新构建镜像快得多。
 #
-# 密码通过环境变量覆盖，默认值仅供本机开发。
+# 场景 B · 换机器 / 重装环境（用 compose 一键起）
+#       docker compose up -d                      # 起 pgvector + redis（本机开发够用）
+#       docker compose --profile with-mysql up -d # 连 MySQL 一起（本机没装 MySQL 时）
+#       docker compose --profile full up -d       # 连应用一起（需要先在环境变量里配好密钥）
+#
+# ⚠️ 从 docker run 迁移到 compose 的注意事项
+#   你现有的 pgvector / scenic-redis 是 docker run 起的（没有 compose 标签），
+#   直接 `docker compose up` 会报容器名冲突。迁移步骤：
+#       docker rm -f pgvector scenic-redis     # 删容器（数据在卷里，不会丢）
+#       docker compose up -d                   # 用 compose 重建
+#   下面把 pgvector 的卷声明为 external 并指向你**已经在用**的 pgvector_data，
+#   这样重建容器后知识库的 71 条向量仍在，不需要重新导入。
 
 services:
   mysql:
+    # 本机已装 MySQL（服务 MySQL96 占用 3306）时**不要启动本服务**，否则端口冲突。
+    # 因此把它放进独立 profile：默认 `docker compose up -d` 不会起它。
+    profiles: ["with-mysql", "full"]
     image: mysql:8.0
     container_name: scenic-mysql
     environment:
@@ -25,7 +36,8 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     ports:
-      - "3306:3306"
+      # 映射到 3307：避免与宿主机 MySQL 抢 3306（容器内部仍是 3306）
+      - "3307:3306"
     volumes:
       - scenic-mysql-data:/var/lib/mysql
     healthcheck:
@@ -36,9 +48,9 @@ services:
       start_period: 30s
 
   pgvector:
-    # 自带 pgvector 扩展的官方镜像（知识库向量、长期记忆、语义缓存三张表都在这里）
+    # 知识库向量（scenic_embeddings）、长期记忆（visitor_memory）、语义缓存（semantic_cache）三张表都在这里
     image: pgvector/pgvector:pg17
-    container_name: scenic-pgvector
+    container_name: pgvector
     environment:
       POSTGRES_DB: scenic_vectors
       POSTGRES_USER: postgres
@@ -47,7 +59,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - scenic-pgvector-data:/var/lib/postgresql/data
+      # 指向你**已经在使用的**命名卷，迁移后向量数据不丢
+      - pgvector_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d scenic_vectors"]
       interval: 10s
@@ -58,6 +71,7 @@ services:
     # 三层记忆（滑窗/摘要）、语义缓存计数、限流、幂等都依赖它
     image: redis:7-alpine
     container_name: scenic-redis
+    # 默认不带密码（本机开发够用）。要加密码见文件末尾说明。
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
@@ -70,7 +84,7 @@ services:
       retries: 12
 
   app:
-    # 仅在 --profile full 时启动；密钥需通过环境变量传入（不要写进 compose 文件）
+    # 完整容器化（演示/部署用）。日常开发不建议用它 —— 改代码要重新构建镜像。
     profiles: ["full"]
     build:
       context: ./backend-java
@@ -85,18 +99,35 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: prod
+      # 容器之间用服务名互相访问
+      SCENIC_MYSQL_HOST: mysql
+      SCENIC_PG_HOST: pgvector
       SCENIC_MYSQL_PASSWORD: ${SCENIC_MYSQL_PASSWORD:-123456}
       SCENIC_PG_PASSWORD: ${SCENIC_PG_PASSWORD:-postgres}
+      # 密钥从宿主机环境变量传入，不写进本文件
       SCENIC_LLM_API_KEY: ${SCENIC_LLM_API_KEY:?请在环境变量里提供大模型密钥}
       SCENIC_EMBEDDING_API_KEY: ${SCENIC_EMBEDDING_API_KEY:-}
       SCENIC_RERANK_API_KEY: ${SCENIC_RERANK_API_KEY:-}
       SCENIC_JWT_SECRET: ${SCENIC_JWT_SECRET:?请提供至少 32 字节的 JWT 密钥}
-      SCENIC_PG_HOST: pgvector
-      SCENIC_MYSQL_HOST: mysql
     ports:
       - "10086:10086"
 
 volumes:
-  scenic-mysql-data:
-  scenic-pgvector-data:
+  # pgvector_data 是**已存在**的卷（你现在的容器正在用），声明为 external：
+  # compose 不会创建也不会删除它，避免误删知识库数据。
+  pgvector_data:
+    external: true
   scenic-redis-data:
+  scenic-mysql-data:
+
+# ─────────────── 如果以后想给 Redis 加密码 ───────────────
+#   1. 改本文件 redis 段：
+#        command: ["redis-server", "--appendonly", "yes", "--requirepass", "${SCENIC_REDIS_PASSWORD}"]
+#   2. 在 backend-java/src/main/resources/application.yml 里加：
+#        spring:
+#          data:
+#            redis:
+#              password: ${SCENIC_REDIS_PASSWORD:}
+#   3. 根目录 .env 里加一行 SCENIC_REDIS_PASSWORD=你的密码
+#   4. docker compose up -d redis（重建后生效；Redis 里是缓存类数据，丢了会自行重建）
+#   IDE 连接时：密码填这个值，用户名留空。
