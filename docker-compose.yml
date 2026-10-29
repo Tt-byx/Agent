@@ -1,31 +1,40 @@
-# Docker 启动配置（Wave 6 建立，2026-10-02 按本机实际情况校正）
+# Docker 启动配置
+#   Wave 6 建立（2026-10-02）；2026-10-07 改为**全容器化**：MySQL 也进容器，一条命令起全部四个服务。
 #
 # ─────────────────────────── 怎么用（重要） ───────────────────────────
 #
-# 场景 A · 本机开发（推荐，也是你现在的情况）
-#   你机器上 MySQL 是**宿主机安装**的（Windows 服务 MySQL96），pgvector 与 Redis 已在容器里跑。
-#   所以日常**只需要确认这两个容器是活的**：
-#       docker ps --filter name=pgvector --filter name=scenic-redis
-#   应用不要放进容器 —— 在 IDE 里直接跑，改完代码几秒就能重启，比重新构建镜像快得多。
+# 日常启动（全容器化，四个服务都在容器里：mysql / pgvector / redis / app）
+#       docker compose up -d
+#   启动后：
+#       应用       http://localhost:10086
+#       MySQL      localhost:3307   （容器内 3306；映射到 3307 是为了避开宿主机已有的 MySQL96）
+#       PostgreSQL localhost:5432
+#       Redis      localhost:6379
 #
-# 场景 B · 换机器 / 重装环境（用 compose 一键起）
-#       docker compose up -d                      # 起 pgvector + redis（本机开发够用）
-#       docker compose --profile with-mysql up -d # 连 MySQL 一起（本机没装 MySQL 时）
-#       docker compose --profile full up -d       # 连应用一起（需要先在环境变量里配好密钥）
+# 改了后端代码后（重点）
+#   代码改动**不会**自动进容器 —— 必须重新打包再重建 app：
+#       1) 宿主机打包： cd backend-java && mvn -q -DskipTests package
+#       2) 重建 + 重启 app： docker compose up -d --build app
+#   之所以是两步：app 用的是 Dockerfile.runtime（单阶段，直接 COPY 宿主机 target/*.jar），
+#   构建只要几秒；若改用 Dockerfile（多阶段自包含），容器内 Maven 拉依赖要十几分钟，不适合频繁改代码。
 #
-# ⚠️ 从 docker run 迁移到 compose 的注意事项
-#   你现有的 pgvector / scenic-redis 是 docker run 起的（没有 compose 标签），
-#   直接 `docker compose up` 会报容器名冲突。迁移步骤：
-#       docker rm -f pgvector scenic-redis     # 删容器（数据在卷里，不会丢）
-#       docker compose up -d                   # 用 compose 重建
-#   下面把 pgvector 的卷声明为 external 并指向你**已经在用**的 pgvector_data，
-#   这样重建容器后知识库的 71 条向量仍在，不需要重新导入。
+# 常用命令
+#       docker compose ps                 # 看四个服务状态与健康
+#       docker compose logs -f app        # 跟应用日志
+#       docker compose restart app        # 重启应用
+#       docker compose down               # 停并删容器（数据卷保留，不丢数据）
+#       docker compose down -v            # ⚠️ 连数据卷一起删（向量/业务数据全丢，慎用）
+#
+# ⚠️ 换机器 / 清空重建
+#   卷是 compose 自己管理的命名卷（见文件末尾 volumes 段），首次 up 会自动创建。
+#   2026-10-07 记录：原来的 pgvector_data 卷曾被 docker prune 删除、71 条向量丢失过一次；
+#   重建后已通过重新处理知识库文档恢复，因此这里不再声明 external。
 
 services:
   mysql:
-    # 本机已装 MySQL（服务 MySQL96 占用 3306）时**不要启动本服务**，否则端口冲突。
-    # 因此把它放进独立 profile：默认 `docker compose up -d` 不会起它。
-    profiles: ["with-mysql", "full"]
+    # 2026-10-07 起改为**默认启动**（全容器化）。
+    # 端口映射到 3307：宿主机还留着 Windows 服务 MySQL96 占着 3306。
+    # 容器内部仍是标准 3306，应用容器通过服务名 mysql 连接，不受映射影响。
     image: mysql:8.0
     container_name: scenic-mysql
     environment:
@@ -59,7 +68,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      # 指向你**已经在使用的**命名卷，迁移后向量数据不丢
+      # compose 管理的命名卷；数据持久化在卷里，down 不删、只有 down -v 才清。
       - pgvector_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d scenic_vectors"]
@@ -84,11 +93,14 @@ services:
       retries: 12
 
   app:
-    # 完整容器化（演示/部署用）。日常开发不建议用它 —— 改代码要重新构建镜像。
-    profiles: ["full"]
+    # 2026-10-07 起默认启动（全容器化）。
+    # 代价要记住：改后端代码后需要 `docker compose up -d --build app` 重新构建（约 1-2 分钟），
+    # 不像在 IDE 里跑那样改完点一下重启就行。
     build:
       context: ./backend-java
-      dockerfile: Dockerfile
+      # 运行态 Dockerfile：直接用宿主机 mvn package 产出的 jar，构建只需几秒。
+      # 要自包含构建（换机器/CI）就把这里换成 Dockerfile（多阶段版本）。
+      dockerfile: Dockerfile.runtime
     container_name: scenic-app
     depends_on:
       mysql:
@@ -97,26 +109,34 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # 密钥统一从项目根目录 .env 注入（该文件已被 gitignore，不会进仓库）。
+    # environment 的优先级高于 env_file：.env 里写的是宿主机地址（localhost），
+    # 容器里必须换成服务名，所以下面显式覆盖。
+    env_file:
+      - ./.env
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      # 容器之间用服务名互相访问
       SCENIC_MYSQL_HOST: mysql
       SCENIC_PG_HOST: pgvector
+      SCENIC_PG_PORT: "5432"
+      # Redis 在 application.yml 里没有配置项（宿主机开发走 Spring Boot 默认的 localhost:6379），
+      # 容器里必须用标准环境变量指向服务名，否则会去连容器自己的 6379 而失败。
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
       SCENIC_MYSQL_PASSWORD: ${SCENIC_MYSQL_PASSWORD:-123456}
       SCENIC_PG_PASSWORD: ${SCENIC_PG_PASSWORD:-postgres}
-      # 密钥从宿主机环境变量传入，不写进本文件
-      SCENIC_LLM_API_KEY: ${SCENIC_LLM_API_KEY:?请在环境变量里提供大模型密钥}
-      SCENIC_EMBEDDING_API_KEY: ${SCENIC_EMBEDDING_API_KEY:-}
-      SCENIC_RERANK_API_KEY: ${SCENIC_RERANK_API_KEY:-}
-      SCENIC_JWT_SECRET: ${SCENIC_JWT_SECRET:?请提供至少 32 字节的 JWT 密钥}
+      # 知识库原始文档的容器内挂载点（对应 application.yml 的 scenic.upload.dir）
+      SCENIC_UPLOAD_DIR: /data/scenic_uploads
+    volumes:
+      # 把宿主机的知识库原始文档挂进容器，便于重建索引
+      - D:/scenic_uploads:/data/scenic_uploads
     ports:
       - "10086:10086"
 
 volumes:
-  # pgvector_data 是**已存在**的卷（你现在的容器正在用），声明为 external：
-  # compose 不会创建也不会删除它，避免误删知识库数据。
+  # 2026-10-07：原有的 pgvector_data 卷随 docker prune 一起被删掉了（向量数据已丢，
+  # 改为启动后重新导入），所以不再声明 external，交给 compose 正常创建与管理。
   pgvector_data:
-    external: true
   scenic-redis-data:
   scenic-mysql-data:
 

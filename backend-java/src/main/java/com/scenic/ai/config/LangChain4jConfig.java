@@ -1,6 +1,7 @@
 package com.scenic.ai.config;
 
 import com.scenic.ai.gateway.AgentMetrics;
+import com.scenic.ai.gateway.ModelRoute;
 import com.scenic.ai.gateway.RetryPolicy;
 import com.scenic.ai.gateway.RoutedChatModel;
 import com.scenic.ai.gateway.RoutedStreamingChatModel;
@@ -70,6 +71,22 @@ public class LangChain4jConfig {
     @Value("${llm.circuit-breaker.half-open-calls:2}")
     private int cbHalfOpenCalls;
 
+    /**
+     * 2026-10-29（D28）· 慢调用也算故障。
+     *
+     * <p>只按失败率熔断会漏掉 LLM 最典型的故障模式：**变慢**。
+     * 正常 2 秒、故障 30 秒，但状态码仍是 200 —— 失败率 0%，熔断器永远不打开，
+     * 每个用户都白等 30 秒。这比直接报错更糟：报错至少能快速降级。
+     *
+     * <p>阈值定在 40 秒是有意的：一次长回答 10~20 秒是正常的，压到 20 秒会误熔断；
+     * 40 秒基本只可能出现在下游拥塞时。慢调用率 80% 才打开，留出偶发抖动的余量。
+     */
+    @Value("${llm.circuit-breaker.slow-call-duration-seconds:40}")
+    private long cbSlowCallSeconds;
+
+    @Value("${llm.circuit-breaker.slow-call-rate-threshold:80}")
+    private float cbSlowCallRateThreshold;
+
     @Value("${llm.fallback.enabled:true}")
     private boolean fallbackEnabled;
 
@@ -91,10 +108,15 @@ public class LangChain4jConfig {
 
         // P8 · 主备路由：DeepSeek 同厂商双档 —— 主 flash（快、省），备 pro（更强）。
         // 主模型异常时自动切备，保可用性优先；硅基流动的 key 只用于 embedding/rerank，不做对话。
-        List<RoutedChatModel.Route> routes = new ArrayList<>();
+        // 2026-10-29（D02）：档位改为**显式声明**。原实现靠「候选名含 pro」判断强弱，
+        // 而默认配置下主备都是 deepseek-v4-pro —— 两条都被判为强模型，排序结果与配置顺序一致，
+        // 语义路由从未生效。现在 tier 写在这里，装配期还会校验档位是否真的分得开。
+        // 2026-10-29（D15）：候选类型统一为 ModelRoute<ChatModel>，与流式路径共用一份定义。
+        List<ModelRoute<ChatModel>> routes = new ArrayList<>();
         String primaryName = "primary:" + chatModelName;
-        routes.add(new RoutedChatModel.Route(
+        routes.add(new ModelRoute<>(
                 primaryName,
+                ModelRoute.Tier.FAST,
                 OpenAiChatModel.builder()
                         .baseUrl(baseUrl)
                         .apiKey(effectiveApiKey())
@@ -111,8 +133,9 @@ public class LangChain4jConfig {
 
         if (fallbackEnabled && fallbackApiKey != null && !fallbackApiKey.isBlank()) {
             String fallbackName = "fallback:" + fallbackModel;
-            routes.add(new RoutedChatModel.Route(
+            routes.add(new ModelRoute<>(
                     fallbackName,
+                    ModelRoute.Tier.STRONG,
                     OpenAiChatModel.builder()
                             .baseUrl(fallbackBaseUrl)
                             .apiKey(fallbackApiKey)
@@ -130,9 +153,12 @@ public class LangChain4jConfig {
             log.warn("[ROUTE] 未配置备用模型（llm.fallback.api-key 为空），主模型故障时将直接报错");
         }
 
-        log.info("[ROUTE] 熔断参数：窗口 {} 次 / 最少样本 {} 次 / 失败率阈值 {}% / 打开 {}s / 半开放行 {} 次",
+        warnIfRoutingDegraded(routes, chatModelName, fallbackModel);
+
+        log.info("[ROUTE] 熔断参数：窗口 {} 次 / 最少样本 {} 次 / 失败率阈值 {}% / "
+                        + "慢调用 {}s 以上且占比 {}% / 打开 {}s / 半开放行 {} 次",
                 cbSlidingWindowSize, cbMinimumCalls, cbFailureRateThreshold,
-                cbWaitSeconds, cbHalfOpenCalls);
+                cbSlowCallSeconds, cbSlowCallRateThreshold, cbWaitSeconds, cbHalfOpenCalls);
 
         return new RoutedChatModel(routes, metrics, retryPolicy);
     }
@@ -152,11 +178,13 @@ public class LangChain4jConfig {
     @Bean
     public StreamingChatModel streamingChatModel(AgentMetrics metrics, RetryPolicy retryPolicy,
                                                  CircuitBreakerRegistry circuitBreakerRegistry) {
-        List<RoutedStreamingChatModel.Route> routes = new ArrayList<>();
+        // 2026-10-29（D15）：与同步路径共用 ModelRoute，档位也保持一致
+        List<ModelRoute<StreamingChatModel>> routes = new ArrayList<>();
 
         String primaryName = "primary:" + chatModelName;
-        routes.add(new RoutedStreamingChatModel.Route(
+        routes.add(new ModelRoute<>(
                 primaryName,
+                ModelRoute.Tier.FAST,
                 OpenAiStreamingChatModel.builder()
                         .baseUrl(baseUrl)
                         .apiKey(effectiveApiKey())
@@ -171,8 +199,9 @@ public class LangChain4jConfig {
 
         if (fallbackEnabled && fallbackApiKey != null && !fallbackApiKey.isBlank()) {
             String fallbackName = "fallback:" + fallbackModel;
-            routes.add(new RoutedStreamingChatModel.Route(
+            routes.add(new ModelRoute<>(
                     fallbackName,
+                    ModelRoute.Tier.STRONG,
                     OpenAiStreamingChatModel.builder()
                             .baseUrl(fallbackBaseUrl)
                             .apiKey(fallbackApiKey)
@@ -204,6 +233,9 @@ public class LangChain4jConfig {
                 .slidingWindowSize(cbSlidingWindowSize)
                 .minimumNumberOfCalls(cbMinimumCalls)
                 .failureRateThreshold(cbFailureRateThreshold)
+                // D28：慢调用与失败一样，都是「这个候选现在不能用」的信号
+                .slowCallDurationThreshold(Duration.ofSeconds(cbSlowCallSeconds))
+                .slowCallRateThreshold(cbSlowCallRateThreshold)
                 .waitDurationInOpenState(Duration.ofSeconds(cbWaitSeconds))
                 .permittedNumberOfCallsInHalfOpenState(cbHalfOpenCalls)
                 .automaticTransitionFromOpenToHalfOpenEnabled(true)
@@ -232,6 +264,49 @@ public class LangChain4jConfig {
      */
     private String effectiveApiKey() {
         return (apiKey == null || apiKey.isBlank()) ? "not-configured" : apiKey;
+    }
+
+    /**
+     * 2026-10-29（D02）· 语义路由有效性校验。两类失效都要在启动期吼出来：
+     *
+     * <ol>
+     *   <li><b>档位分不开</b>：所有候选同一档 → {@code orderByComplexity} 排序结果等于配置顺序，
+     *       路由看起来在工作、实际零效果。</li>
+     *   <li><b>档位分开了但模型是同一个</b>：主备都配成 {@code deepseek-v4-pro} 就是这种情况 ——
+     *       排序真的会变，但两个候选指向同一个模型，成本/质量分层依然拿不到。
+     *       这是默认配置下的真实状态，比第 1 类更隐蔽：日志显示"候选顺序已调整"，
+     *       看起来一切正常。</li>
+     * </ol>
+     */
+    private void warnIfRoutingDegraded(List<? extends ModelRoute<?>> routes,
+                                       String primaryModel, String fallbackModel) {
+        if (routes.size() < 2) {
+            return;
+        }
+        long strong = routes.stream()
+                .filter(r -> r.tier() == ModelRoute.Tier.STRONG)
+                .count();
+        boolean tiersIndistinguishable = strong == 0 || strong == routes.size();
+        boolean sameModel = primaryModel != null && primaryModel.equals(fallbackModel);
+
+        if (!tiersIndistinguishable && !sameModel) {
+            return;
+        }
+
+        log.warn("========================================================");
+        if (tiersIndistinguishable) {
+            log.warn(" [ROUTE] 语义路由不会生效：{} 条候选全部是 {} 档位", routes.size(),
+                    strong == 0 ? "FAST" : "STRONG");
+        }
+        if (sameModel) {
+            log.warn(" [ROUTE] 主备是同一个模型（{}）：档位不同，但候选指向同一个模型 ——",
+                    primaryModel);
+            log.warn("   语义路由的排序会变，成本与质量分层却拿不到任何收益。");
+            log.warn("   要让双档真正生效，把 llm.chat-model 配成快模型（如 deepseek-v4-flash），");
+            log.warn("   llm.fallback.model 保持强模型（如 deepseek-v4-pro）。");
+        }
+        log.warn("  候选：{}", routes.stream().map(r -> r.name() + " / " + r.tier()).toList());
+        log.warn("========================================================");
     }
 
     private void warnIfKeyMissing() {

@@ -11,9 +11,8 @@ import com.scenic.ai.exception.ApiException;
 import com.scenic.ai.gateway.IdempotencyStore;
 import com.scenic.ai.mapper.ChatMessageMapper;
 import com.scenic.ai.mapper.ConversationMapper;
-import com.scenic.ai.security.AuthUser;
 import com.scenic.ai.security.CurrentUser;
-import com.scenic.ai.security.JwtService;
+import com.scenic.ai.security.IdentityResolver;
 import com.scenic.ai.service.ChatService;
 import com.scenic.ai.util.SentimentAnalyzer;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +40,7 @@ public class ChatServiceImpl implements ChatService {
     private MultiAgentOrchestrator multiAgentOrchestrator;
 
     @Autowired
-    private JwtService jwtService;
+    private IdentityResolver identityResolver;
 
     @Autowired
     private IdempotencyStore idempotencyStore;
@@ -58,18 +57,16 @@ public class ChatServiceImpl implements ChatService {
 
         // ── Wave 4 · 幂等：同一身份 + 同一 requestId 只真正执行一次 ──
         // 作用域用「服务端认定的身份」而不是请求里声明的 visitorId，避免 A 用 B 的 requestId 拿到 B 的结果。
+        // 2026-10-29（D17）：身份统一由 IdentityResolver 判定；拿不到可信身份就**放弃幂等**，
+        // 不再退化到共享的 "anonymous" 命名空间（否则两个匿名用户用同一 requestId 会互相命中答案）。
         String idemKey = null;
         if (request.getRequestId() != null && !request.getRequestId().isBlank()) {
-            String identity;
-            if (currentUserId != null) {
-                identity = "user:" + currentUserId;
-            } else {
-                String guestId = jwtService.parseGuestVisitorId(
-                        jwtService.stripBearer(request.getVisitorToken()));
-                identity = guestId != null ? guestId : "anonymous";
-            }
-            idemKey = idempotencyStore.buildKey(identity, request.getRequestId());
+            String scope = identityResolver.resolve(request.getVisitorToken()).idempotencyScope();
+            idemKey = idempotencyStore.buildKey(scope, request.getRequestId());
+            // buildKey 在 scope 为空时返回 null —— 此时整个过程跳过幂等，直接走正常链路
+        }
 
+        if (idemKey != null) {
             ChatResponse firstResult = idempotencyStore.find(idemKey);
             if (firstResult != null) {
                 log.info("[IDEMPOTENT] requestId={} 已处理过，直接返回首次结果（不再调用模型）",
@@ -174,6 +171,9 @@ public class ChatServiceImpl implements ChatService {
         chatMessageMapper.insert(userMsg);
 
         String memoryKey = resolveMemoryKey(request, sessionId);
+        // Wave 5 补漏：会话确定后立刻把 sessionId 下发给前端，
+        // 否则前端拿不到它，无法把后续消息归到同一会话（详见 StreamSink#onSession）。
+        sink.onSession(sessionId);
         AgentLoop.Result result = agentLoop.runStreaming(sessionId, memoryKey, request.getMessage(), sink);
 
         ChatMessage aiMsg = new ChatMessage();
@@ -181,7 +181,18 @@ public class ChatServiceImpl implements ChatService {
         aiMsg.setRole("assistant");
         aiMsg.setContent(result.answer());
         aiMsg.setSentiment(SentimentAnalyzer.analyze(result.answer()));
-        chatMessageMapper.insert(aiMsg);
+        // 失败收口（MODEL_ERROR 时 answer 是统一的错误话术）不落库：
+        // 否则用户刷新会话时会把"服务暂时不可用"当成一条真实的 AI 回答，也被计入统计口径。
+        // TIMEOUT / MAX_STEPS 会产出降级但有意义的回答，仍落库。
+        if ("CLIENT_GONE".equals(result.stopReason())) {
+            // D14：客户端已离开，答案没有送到任何人眼前。落库只会让历史里多出一条
+            // 没人看过的回复，用户下次打开还会以为「我当时问过、它答过」。
+            log.info("[STREAM] 客户端已断开，跳过 AI 回复落库");
+        } else if (!"MODEL_ERROR".equals(result.stopReason())) {
+            chatMessageMapper.insert(aiMsg);
+        } else {
+            log.warn("[STREAM] 本轮为 MODEL_ERROR 收口，跳过 AI 回复落库（避免污染历史对话）");
+        }
 
         log.info("[STREAM] 对话完成：{} 步、{} 次工具调用、收敛={}、终止原因={}",
                 result.stepCount(), result.toolCallCount(), result.converged(), result.stopReason());
@@ -242,17 +253,11 @@ public class ChatServiceImpl implements ChatService {
      *   1. 已登录 → user:{id}，**完全忽略**客户端声明；
      *   2. 游客 → 只认服务端签发凭证（/api/auth/guest）里的 visitorId；
      *   3. 无有效凭证 → 退化为会话级隔离：拿不到跨会话记忆，但**也读不到别人的数据**（安全默认）。
+     *
+     * <p>2026-10-29（D05）：判断逻辑下沉到 {@link IdentityResolver}，与限流链路共用同一份实现 ——
+     * 否则「记忆链路不信 visitorId、限流链路信 visitorId」这种不一致还会再长出来。
      */
     private String resolveMemoryKey(ChatRequest request, String sessionId) {
-        AuthUser current = CurrentUser.get();
-        if (current != null) {
-            return current.memoryKey();
-        }
-        String visitorId = jwtService.parseGuestVisitorId(
-                jwtService.stripBearer(request.getVisitorToken()));
-        if (visitorId != null) {
-            return visitorId;
-        }
-        return sessionId;
+        return identityResolver.memoryKey(request.getVisitorToken(), sessionId);
     }
 }

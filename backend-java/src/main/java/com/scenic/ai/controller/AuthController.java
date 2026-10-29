@@ -9,9 +9,11 @@ import com.scenic.ai.security.CurrentUser;
 import com.scenic.ai.security.JwtService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -42,6 +44,14 @@ public class AuthController {
     @Autowired
     private JwtService jwtService;
 
+    /**
+     * 2026-10-29（D06）· 占位哈希，用于「用户不存在」时做一次等价耗时的 BCrypt 比对。
+     *
+     * <p>必须是**合法**的 bcrypt 串：如果给个随便的字符串，{@code matches()} 会立刻返回 false，
+     * 时间差又回来了，这个修复就白做了。启动时生成一次即可（约 100ms，单例只算一次）。
+     */
+    private final String dummyPasswordHash = new BCryptPasswordEncoder().encode("scenic-timing-dummy");
+
     @PostMapping("/register")
     public Result<Map<String, Object>> register(@RequestBody Map<String, String> body) {
         String username = body.get("username");
@@ -59,6 +69,15 @@ public class AuthController {
         }
         if (password.length() > 64) {
             return Result.error(400, "密码最长 64 位");
+        }
+        // 2026-10-29（D07）：BCrypt 的硬限制是 **72 字节**，不是 72 个字符。
+        // 中文一个字 3 字节 → 64 个汉字 = 192 字节 → passwordEncoder.encode() 抛
+        // IllegalArgumentException → 落到全局兜底变成 500「服务内部错误」。
+        // 校验必须在 encode 之前，而且必须按字节算。
+        int passwordBytes = password.getBytes(StandardCharsets.UTF_8).length;
+        if (passwordBytes > 72) {
+            return Result.error(400,
+                    "密码过长：最多 72 字节（约 24 个中文字符，或 72 个英文字符）");
         }
 
         Long exists = userMapper.selectCount(
@@ -93,6 +112,14 @@ public class AuthController {
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username));
 
+        // 2026-10-29（D06）· 账号枚举的时序侧信道。
+        // 原实现是 `user == null || !passwordMatches(...)`，|| 短路：用户不存在时**根本不跑 BCrypt**。
+        // 而 BCrypt 约 100ms、数据库查询约 5ms —— 响应时间差 20 倍，多次采样取中位数
+        // 就能判定账号是否存在。文案层早就统一成「用户名或密码错误」，时序层没跟上，属于「看起来防了」。
+        // 这里让用户不存在时也做一次等价耗时的比对，把两条分支的时间对齐。
+        if (user == null) {
+            passwordEncoder.matches(password, dummyPasswordHash);
+        }
         if (user == null || !passwordMatchesAndMaybeUpgrade(password, user)) {
             // 不区分「用户不存在」与「密码错误」，避免账号枚举
             return Result.error(401, "用户名或密码错误");

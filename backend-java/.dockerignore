@@ -1,0 +1,14 @@
+# 构建上下文瘦身：运行态镜像只需要 target 下的 fat jar，
+# 源码与构建脚本不必传进 Docker daemon（本地构建看不出差别，CI 上能省不少时间）。
+
+src
+pom.xml
+Dockerfile
+Dockerfile.runtime
+*.log
+logs
+target/classes
+target/test-classes
+target/maven-status
+target/generated-sources
+target/generated-test-sources

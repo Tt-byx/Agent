@@ -51,6 +51,7 @@ public class VectorStoreAdmin {
         config.setMinimumIdle(0);
         config.setConnectionTimeout(3000);
         config.setPoolName("pgvector-admin");
+        config.setInitializationFailTimeout(-1);   // 跳过启动时的连接检查（pgvector 没起来也能启动应用）
         this.dataSource = new HikariDataSource(config);
         this.jdbcTemplate = new JdbcTemplate(dataSource);
 
@@ -140,6 +141,54 @@ public class VectorStoreAdmin {
                         + " ORDER BY (metadata->>'" + timestampKey + "') ASC NULLS FIRST LIMIT ?)",
                 excess);
         log.info("[VECTOR-ADMIN] 表 {} 超出容量上限，已清理最旧 {} 条", tableName, deleted);
+        return deleted;
+    }
+
+    /**
+     * 2026-10-29（D18）· 按 metadata 某个键统计条数。
+     *
+     * <p>长期记忆（{@code visitor_memory} 表）需要「这个游客存了多少条偏好」，
+     * 而 {@code EmbeddingStore} 只暴露「写 / 按条件删 / 相似度检索」，
+     * 拿不到这种聚合信息 —— 所以走这条直连通道。
+     *
+     * <p>{@code key} 是内部常量（非用户输入），此处拼接无注入风险，与
+     * {@link #deleteOldestEntries} 的处理方式保持一致。
+     */
+    public long countByMetadata(String tableName, String key, String value) {
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM " + tableName + " WHERE metadata->>'" + key + "' = ?",
+                Long.class, value);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * 2026-10-29（D18）· 在某个 metadata 分组内，按时间字段淘汰最旧条目。
+     *
+     * <p>与 {@link #deleteOldestEntries} 的区别是**带分组条件**：
+     * 长期记忆的容量上限是「每个游客 N 条」，不是「全表 N 条」，
+     * 所以必须限定 {@code memory_key}。
+     *
+     * @param filterKey   分组键（如 {@code memory_key}）
+     * @param filterValue 分组值（如 {@code guest-xxx}）
+     * @param timestampKey 时间字段（如 {@code created_at}），无该字段的历史条目按最旧处理
+     * @param keepCount   该分组保留多少条
+     * @return 实际删除条数
+     */
+    public int deleteOldestByMetadata(String tableName, String filterKey, String filterValue,
+                                      String timestampKey, int keepCount) {
+        long total = countByMetadata(tableName, filterKey, filterValue);
+        long excess = total - keepCount;
+        if (excess <= 0) {
+            return 0;
+        }
+        int deleted = jdbcTemplate.update(
+                "DELETE FROM " + tableName + " WHERE embedding_id IN ("
+                        + "SELECT embedding_id FROM " + tableName
+                        + " WHERE metadata->>'" + filterKey + "' = ?"
+                        + " ORDER BY (metadata->>'" + timestampKey + "') ASC NULLS FIRST LIMIT ?)",
+                filterValue, excess);
+        log.info("[VECTOR-ADMIN] 表 {} 分组 {}={} 超出上限，已清理最旧 {} 条",
+                tableName, filterKey, filterValue, deleted);
         return deleted;
     }
 

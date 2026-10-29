@@ -2,14 +2,16 @@ package com.scenic.ai.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.scenic.ai.entity.KnowledgeDoc;
+import com.scenic.ai.exception.ApiException;
 import com.scenic.ai.mapper.KnowledgeDocMapper;
 import com.scenic.ai.rag.ingest.DocumentIngestionService;
+import com.scenic.ai.rag.ingest.DocumentTextExtractor;
+import com.scenic.ai.service.DocumentProcessService;
 import com.scenic.ai.service.KnowledgeDocService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -38,6 +40,10 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
     @Autowired
     private DocumentIngestionService ingestionService;
 
+    /** 2026-10-29（D08）：向量化必须经独立 Bean 的代理调用，@Async 才生效 */
+    @Autowired
+    private DocumentProcessService documentProcessService;
+
     @Value("${scenic.upload.dir}")
     private String uploadDir;
 
@@ -49,6 +55,16 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         // 1. 保存文件到磁盘
         String originalFilename = fixFilenameEncoding(file.getOriginalFilename());
         String fileType = getFileExtension(originalFilename);
+        // 2026-10-29（D32）· 入口就挡住不支持的类型。
+        // 原实现把类型校验一直拖到下游 DocumentTextExtractor（处理阶段），
+        // 结果是任意文件都会先落盘到 uploadDir：
+        //   ① 若该目录被配成 Web 可访问，传 .html / .js 就是存储型 XSS；
+        //   ② 即使不可访问，也是白白占磁盘 + 一条永远处理失败的脏记录。
+        // 能在入口挡住的，不该拖到处理阶段。
+        if (!DocumentTextExtractor.SUPPORTED_TYPES.contains(fileType)) {
+            throw ApiException.badRequest(
+                    "不支持的文件类型：" + fileType + "，仅支持 " + DocumentTextExtractor.SUPPORTED_TYPES);
+        }
         String savedFileName = UUID.randomUUID() + "." + fileType;
         String filePath = uploadDir + "/" + savedFileName;
 
@@ -84,39 +100,12 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
     }
 
     @Override
-    @Async
     public void process(Long id) {
-        KnowledgeDoc doc = knowledgeDocMapper.selectById(id);
-        if (doc == null) {
-            throw new RuntimeException("文档不存在: " + id);
-        }
-
-        updateProgress(id, 1, "parsing", 0);
-        log.info("开始处理文档: id={}, file={}", id, doc.getFileUrl());
-
-        try {
-            DocumentIngestionService.IngestResult result = ingestionService.ingest(
-                    doc.getId(),
-                    doc.getTitle(),
-                    Path.of(doc.getFileUrl()),
-                    doc.getFileType(),
-                    (stage, percent) -> updateProgress(id, 1, stage, percent));
-
-            KnowledgeDoc latest = knowledgeDocMapper.selectById(id);
-            if (latest != null) {
-                latest.setVectorStatus(2); // 完成
-                latest.setProcessStage("completed");
-                latest.setProcessProgress(100);
-                latest.setChunkCount(result.chunkCount());
-                latest.setUpdatedAt(LocalDateTime.now());
-                knowledgeDocMapper.updateById(latest);
-            }
-            log.info("文档处理完成: id={}, chunkCount={}", id, result.chunkCount());
-
-        } catch (Exception e) {
-            log.error("文档处理失败: id={}, error={}", id, e.getMessage(), e);
-            updateProgress(id, 3, "failed", 0);
-        }
+        // 2026-10-29（D08）：@Async 靠 Spring 的 AOP 代理生效，而 `this.process(id)` 用的是原始对象，
+        // 注解被完全跳过 —— 于是同一个方法从 Controller 进是异步、从 update()/reprocess() 进是同步，
+        // 表现出来就是「只改个标题却卡 30 秒」。现在统一委托给独立的 DocumentProcessService，
+        // 任何入口进来都经过代理，异步语义不再取决于调用点。
+        documentProcessService.processAsync(id);
     }
 
     /**
@@ -232,12 +221,16 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
             throw new RuntimeException("文档不存在: " + id);
         }
 
+        // 2026-10-29（D09）· 顺序对调：先删向量，删成功了才软删业务记录。
+        // 原实现先软删（用户立刻看不到）再删向量（失败只 warn），一旦第二步失败就进入
+        // 「管理端列表里没有这篇文档，但用户提问仍能检索到它」的状态 ——
+        // 这是最坏的中间态：不可见、不可发现、也没人会去修。
+        // 反过来先删向量：失败时文档仍然可见，用户可以自己发现并重试 —— 让失败可见，而不是把它藏起来。
+        ingestionService.deleteDocumentOrThrow(id);
+
         doc.setStatus(0);
         doc.setUpdatedAt(LocalDateTime.now());
         knowledgeDocMapper.updateById(doc);
-
-        // 同步删除向量与关键词索引（原先是调 Python，现已迁入 JVM）
-        ingestionService.deleteDocument(id);
     }
 
     @Override
@@ -246,22 +239,8 @@ public class KnowledgeDocServiceImpl implements KnowledgeDocService {
         if (doc == null) {
             throw new RuntimeException("文档不存在: " + id);
         }
-
-        updateProgress(id, 1, "parsing", 0);
-        process(id);
-    }
-
-    /** 统一的状态更新入口，避免各处重复拼字段 */
-    private void updateProgress(Long id, int vectorStatus, String stage, int progress) {
-        KnowledgeDoc doc = knowledgeDocMapper.selectById(id);
-        if (doc == null) {
-            return;
-        }
-        doc.setVectorStatus(vectorStatus);
-        doc.setProcessStage(stage);
-        doc.setProcessProgress(progress);
-        doc.setUpdatedAt(LocalDateTime.now());
-        knowledgeDocMapper.updateById(doc);
+        // 进度重置（parsing / 0）由 processAsync 进入时自己写，这里不重复写一遍
+        documentProcessService.processAsync(id);
     }
 
     private String getFileExtension(String filename) {

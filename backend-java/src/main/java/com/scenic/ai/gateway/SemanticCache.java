@@ -51,6 +51,21 @@ public class SemanticCache {
             "你提到", "您提到", "为你推荐", "为您推荐", "记住你", "记住您",
             "你的历史", "您的历史", "你上次", "您上次");
 
+    /**
+     * 2026-10-29（D03）· 时效性内容标记：命中任一即不缓存。
+     *
+     * <p>这是「用过工具就不缓存」（{@code AgentLoop} 侧的主闸门）之外的**兜底**：
+     * 模型有时会不打工具、直接凭上下文或记忆作答（"今天应该挺热的"），
+     * 这种回答同样不可跨请求复用。宁可少缓存一条，也不能把过期信息发给下一位游客 ——
+     * 缓存未命中的代价是多一次模型调用，缓存污染的代价是用户拿到错误答案。
+     *
+     * <p>代价说明：像「今天开放吗」这类本身稳定的问题也会被判为时效性而不缓存。
+     * 这是**有意的**保守：正确性优先于命中率。
+     */
+    private static final List<String> REALTIME_MARKERS = List.of(
+            "今天", "今日", "现在", "当前", "此刻", "目前", "实时",
+            "刚才", "下一场", "本场", "还有约", "还剩");
+
     private static final String TABLE = "semantic_cache";
     private static final String TIMESTAMP_KEY = "cached_at";
 
@@ -128,6 +143,11 @@ public class SemanticCache {
             log.info("[CACHE] 答案疑似含个性化内容，跳过缓存（跨用户共享安全阀）：{}", abbreviate(query));
             return;
         }
+        // D03 · 第二道闸门：时效性内容不缓存（主闸门在 AgentLoop：用过工具的轮次不写缓存）
+        if (looksRealtime(answer)) {
+            log.info("[CACHE] 答案含时效性内容，跳过缓存：{}", abbreviate(query));
+            return;
+        }
         try {
             Metadata metadata = Metadata.from(Map.of(
                     "query", query,
@@ -179,6 +199,19 @@ public class SemanticCache {
      */
     private boolean looksPersonalized(String answer) {
         for (String marker : PERSONAL_MARKERS) {
+            if (answer.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * D03 兜底闸门：答案是否含时效性内容。
+     * 命中标记即不缓存 —— 见 {@link #REALTIME_MARKERS} 的代价说明。
+     */
+    private boolean looksRealtime(String answer) {
+        for (String marker : REALTIME_MARKERS) {
             if (answer.contains(marker)) {
                 return true;
             }

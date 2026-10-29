@@ -1,0 +1,29 @@
+# 运行态镜像（compose 默认用这个）
+#
+# 为什么不用多阶段（容器内 mvn package）：
+#   实测首次构建要在容器里下载整个 Maven 依赖树，10 分钟都没跑完；
+#   而宿主机 Maven 复用本地仓库只要 15 秒。对"频繁改代码"的场景，
+#   改完后重新构建镜像从十几分钟降到十几秒 —— 这个差别是决定性的。
+#
+# 代价：构建前需要宿主机先打包（你本来就有 Maven）。
+#   一条命令：
+#       cd backend-java && mvn -DskipTests package && cd .. && docker compose up -d --build
+#
+# 需要"换机器/CI 上自包含构建"时，改用同目录的 Dockerfile（多阶段版本）：
+#       docker build -f Dockerfile -t scenic-agent .
+
+FROM eclipse-temurin:17-jre-alpine
+
+WORKDIR /app
+
+ENV TZ=Asia/Shanghai \
+    LANG=C.UTF-8 \
+    JAVA_OPTS="-XX:MaxRAMPercentage=70 -XX:+UseG1GC"
+
+# 直接使用宿主机打包好的 fat jar
+COPY target/*.jar app.jar
+
+EXPOSE 10086
+
+# 容器内存由 MaxRAMPercentage 决定堆上限，避免写死 -Xmx 换机器后失衡
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

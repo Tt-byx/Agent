@@ -14,6 +14,8 @@ const menuItems = [
   { path: '/admin/conversations', icon: 'ChatDotRound', label: '对话记录' },
   { path: '/admin/ai-assistant', icon: 'ChatLineSquare', label: 'AI助手' },
   { path: '/admin/marketing-report', icon: 'DataAnalysis', label: '营销报告' },
+  { path: '/admin/ops', icon: 'Money', label: '成本与性能' },
+  { path: '/admin/rag-console', icon: 'Search', label: 'RAG 运维台' },
   { path: '/admin/system', icon: 'Setting', label: '系统管理' },
 ]
 </script>

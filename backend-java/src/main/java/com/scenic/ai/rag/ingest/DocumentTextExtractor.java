@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -16,9 +17,13 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -140,18 +145,46 @@ public class DocumentTextExtractor {
     }
 
     /**
-     * 单元格取值。数值型去掉多余的 ".0"，避免 "2019.0 年" 这类噪音。
+     * 单元格取值。
+     *
+     * <p>本方法的定位是「**取值归一化**」—— 去掉格式化带来的 {@code .0}、首尾空白、
+     * 日期序列号、科学计数法。它**不是**完整的文本清洗：中间多余空格、全角/半角混用、
+     * 换行符等一概不处理，需要的话得在外面再包一层。
+     *
+     * <p>2026-10-29（D22）修了两类噪音：
+     * <ol>
+     *   <li><b>日期变成序列号</b>：Excel 里日期本质就是个数字，
+     *       原实现直接走 NUMERIC 分支，{@code 2019-01-01} 会输出成 {@code 43466}。
+     *       必须在数值处理**之前**用 {@link DateUtil#isCellDateFormatted} 单独判断。</li>
+     *   <li><b>科学计数法</b>：{@code 1.0E20} 这类会原样输出，污染检索。
+     *       改用 {@link BigDecimal#toPlainString()} 展开。</li>
+     * </ol>
+     *
+     * <p>仍然救不回来的：超过 15 位的数字 ID —— Excel 自己就把精度截断了，
+     * 那是数据源的问题，读取侧无能为力。
      */
     private String cellText(Cell cell, DataFormatter formatter) {
         if (cell == null) {
             return "";
         }
         if (cell.getCellType() == CellType.NUMERIC) {
-            double value = cell.getNumericCellValue();
-            if (!Double.isInfinite(value) && value == Math.floor(value)) {
-                return String.valueOf((long) value);
+            // 日期要先判：这一支必须排在纯数值之前，否则日期会变成 43466 这类序列号
+            if (DateUtil.isCellDateFormatted(cell)) {
+                LocalDateTime dateTime = cell.getLocalDateTimeCellValue();
+                if (dateTime == null) {
+                    return formatter.formatCellValue(cell).strip();
+                }
+                return dateTime.toLocalTime().equals(LocalTime.MIDNIGHT)
+                        ? dateTime.toLocalDate().toString()                       // 2019-01-01
+                        : dateTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
             }
-            return String.valueOf(value);
+            double value = cell.getNumericCellValue();
+            if (Double.isNaN(value) || Double.isInfinite(value)) {
+                return formatter.formatCellValue(cell).strip();
+            }
+            // BigDecimal 而不是 String.valueOf：后者会把 1e20 写成 "1.0E20"；
+            // toPlainString 展开成完整数字，stripTrailingZeros 去掉 "2019.0" 的尾巴
+            return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
         }
         if (cell.getCellType() == CellType.STRING) {
             return cell.getStringCellValue().strip();

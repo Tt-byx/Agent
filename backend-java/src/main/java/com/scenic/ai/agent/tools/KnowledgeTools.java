@@ -7,10 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * P7：把知识库检索从「无条件注入上下文」改成 **Agent 可自主调用的工具**。
- *
- * 这是 P7 最关键的架构变化 —— 之前每轮问答都会先检索一次（哪怕问的是"你好"），
- * 现在由模型自己判断要不要查知识库。
+ * 之前每一轮对话都是无条件的查知识库，浪费资源，。现在把查知识库变成一个可调用的工具，需要调用的时候才调用
  */
 @Component
 @Slf4j

@@ -52,11 +52,11 @@ public class AgentToolbox {
     private final List<String> toolNames;
 
     /** 执行资源：所有派生工具箱共享同一个线程池，避免每个实例各建一个池 */
-    private final ExecutorService toolExecutor;
-    private final long toolTimeoutMs;
-    private final int toolMaxAttempts;
-    private final RetryPolicy retryPolicy;
-    private final AgentMetrics metrics;
+    private final ExecutorService toolExecutor; //工具线程池（超时控制）
+    private final long toolTimeoutMs;   //单工具超时15s
+    private final int toolMaxAttempts;  //最多尝试2词
+    private final RetryPolicy retryPolicy;  //重试策略（判断哪些错误能重试）
+    private final AgentMetrics metrics; //指标上报
 
     private AgentToolbox(List<ToolSpecification> specifications,
                          Map<String, Object> ownerByTool,
@@ -122,8 +122,21 @@ public class AgentToolbox {
         List<String> names = new ArrayList<>();
         for (Object toolObject : toolObjects) {
             for (ToolSpecification spec : ToolSpecifications.toolSpecificationsFrom(toolObject)) {
+                // 2026-10-29（D25）：重名必须启动期就炸。
+                // 原实现是静默覆盖 —— specs 里留两条同名、owners 只留后来的实现。
+                // 结果：模型看到两份 schema（可能参数不同），实际执行的是另一个方法，
+                // 表现为「工具调对了但结果不对」，排查成本极高。
+                // 判断依据：owners 是 LinkedHashMap，putIfAbsent 返回非 null 即说明已存在。
+                Object previousOwner = owners.putIfAbsent(spec.name(), toolObject);
+                if (previousOwner != null) {
+                    throw new IllegalStateException(
+                            "工具名重复：「" + spec.name() + "」同时来自 "
+                                    + previousOwner.getClass().getSimpleName() + " 与 "
+                                    + toolObject.getClass().getSimpleName()
+                                    + "。同名工具会让模型看到两份 schema、却只执行其中一个实现。"
+                                    + "请在 @Tool 注解上改名。");
+                }
                 specs.add(spec);
-                owners.put(spec.name(), toolObject);
                 names.add(spec.name());
             }
         }

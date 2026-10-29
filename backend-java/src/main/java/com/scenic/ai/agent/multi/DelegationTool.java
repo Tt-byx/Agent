@@ -2,9 +2,9 @@ package com.scenic.ai.agent.multi;
 
 import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.gateway.AgentMetrics;
-import com.scenic.ai.memory.MemoryContextHolder;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.agent.tool.ToolMemoryId;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -62,6 +62,7 @@ public class DelegationTool {
             + "可选专家：knowledge（景区知识顾问）、itinerary（行程规划师）、operations（运营实况分析师）。"
             + "当问题涉及多个领域时，可以分别委派给不同专家，最后由你汇总。")
     public String delegateToSpecialist(
+            @ToolMemoryId String baseKey,
             @P("专家名称，可取：knowledge、itinerary、operations") String agentName,
             @P("交给这位专家的具体任务，要说清楚要它做什么") String task) {
 
@@ -90,10 +91,12 @@ public class DelegationTool {
         }
         window[0]++;
 
-        String baseKey = MemoryContextHolder.current();
         // Wave 6 · 子 Agent 用**独立记忆键**：任务描述已由 Supervisor 完整给出，
         // 专家不依赖共享的短期对话上下文，独立键反而避免了上下文串味。
-        String specialistKey = "specialist:" + agentName + ":" + baseKey;
+        // 2026-10-29（D01）：baseKey 由 @ToolMemoryId 注入。原实现读 ThreadLocal，
+        // 而工具跑在独立线程池里，读到的永远是空串 → 键退化成 "specialist:knowledge:"，
+        // 所有游客共用一份专家记忆（跨用户偏好串号）。
+        String specialistKey = "specialist:" + agentName + ":" + (baseKey == null ? "" : baseKey);
 
         log.info("[SUPERVISOR] 委派 -> {}（{}）第 {} 次：{}",
                 specialist.name(), specialist.title(), window[0], task);

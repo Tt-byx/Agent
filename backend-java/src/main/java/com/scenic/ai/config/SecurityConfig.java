@@ -56,9 +56,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                        // 公开：登录注册、健康检查（探活用）、WebSocket 握手、MCP 端点、监控端点
+                        // 公开：登录注册、健康检查（探活用）、MCP 端点、监控端点
                         // 注：/actuator/prometheus 生产环境应改为仅内网可访问
-                        .requestMatchers("/api/auth/**", "/api/system/health", "/ws/**",
+                        // 2026-10-29（D30）：/ws/** 已移除 —— WebSocket 链路整体删除，不再有该端点
+                        .requestMatchers("/api/auth/**", "/api/system/health",
                                 "/mcp", "/mcp/**", "/actuator/health", "/actuator/info",
                                 "/actuator/prometheus").permitAll()
                         // 游客可用：对话入口（另有 Redis 限流与隔离键校验保护）

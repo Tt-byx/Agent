@@ -51,11 +51,12 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- WebSocket -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-websocket</artifactId>
-        </dependency>
+        <!-- 2026-10-29（D30）：已移除 spring-boot-starter-websocket。
+             WebSocket 对话链路在 Wave 5 改成 SSE 之后就废弃了，但整条代码一直留着
+             （前端 src/api/websocket.js 也已无人 import）。留着它的代价不只是几百行死代码：
+             ChatWebSocketHandler 自己实现了一套会话创建，**没有 assertConversationOwnership**，
+             知道 sessionId 就能往别人的会话里写消息。删掉等于顺手关掉这个越权面。
+             对话现在只有两条路径：POST /api/chat（整段）与 POST /api/chat/stream（SSE）。 -->
 
         <!-- ================================================================
              Wave 0 · 安全底座：鉴权与授权

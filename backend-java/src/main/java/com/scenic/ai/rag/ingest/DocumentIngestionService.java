@@ -130,9 +130,27 @@ public class DocumentIngestionService {
         return new IngestResult(docId, docTitle, segments.size(), text.length());
     }
 
-    /** 删除文档及其全部向量，并同步刷新关键词索引 */
-    public void deleteDocument(Long docId) {
-        removeByDocId(docId);
+    /**
+     * 删除文档及其全部向量，并同步刷新关键词索引。**失败会抛出**。
+     *
+     * <p>2026-10-29（D09）：这里刻意与导入流程的「清旧失败只告警」分开，两种语义不能混用 ——
+     *
+     * <ul>
+     *   <li><b>导入</b>时新向量已经就位，清旧失败最坏是新旧共存（检索结果重复，重跑一次即自愈），
+     *       所以不阻断；</li>
+     *   <li><b>删除</b>时如果也吞掉异常，调用方就会继续把业务记录软删掉，留下
+     *       「管理端看不到这篇文档、但用户提问仍能检索到它」的隐性脏数据 ——
+     *       不可见、不可发现、也没人会去修。</li>
+     * </ul>
+     *
+     * 所以删除路径必须是「先删向量，删成功了才软删记录」。
+     */
+    public void deleteDocumentOrThrow(Long docId) {
+        storeProvider.getObject().removeAll(
+                dev.langchain4j.store.embedding.filter.MetadataFilterBuilder
+                        .metadataKey("doc_id").isEqualTo(String.valueOf(docId)));
+        log.info("已清除文档 id={} 的全部向量", docId);
+        // 向量库变了，关键词索引必须同步重建，否则 BM25 那一路还能检索到已删文档
         bm25Index.reload();
     }
 
@@ -188,16 +206,4 @@ public class DocumentIngestionService {
         }
     }
 
-    /** 删除某文档的全部向量 */
-    public void removeByDocId(Long docId) {
-        try {
-            storeProvider.getObject().removeAll(
-                    dev.langchain4j.store.embedding.filter.MetadataFilterBuilder
-                            .metadataKey("doc_id").isEqualTo(String.valueOf(docId)));
-            log.info("已清除文档 id={} 的旧向量", docId);
-        } catch (Exception e) {
-            // 清旧失败通常意味着本来就没有（或向量库未就绪），不阻断导入
-            log.warn("清除文档 id={} 旧向量失败（可能本来就不存在）: {}", docId, e.getMessage());
-        }
-    }
 }

@@ -173,7 +173,8 @@ function formatTime(time) {
 }
 
 onMounted(async () => {
-  chatStore.initWebSocket()
+  // 2026-10-29（D30 收尾）：SSE 是「按需建立、用完即断」，不需要在页面挂载时预热长连接，
+  // 所以这里不再调用（已删除的）initWebSocket。
   await userStore.fetchMe()
   await loadLastConversation()
 })
@@ -187,8 +188,8 @@ onUnmounted(() => {
   <div class="chat-view">
     <div class="chat-layout">
       <div class="chat-panel">
-        <div v-if="!chatStore.isWsConnected" class="connection-hint">
-          <span class="dot"></span> 聊天服务未连接
+        <div v-if="chatStore.lastTrace?.traceId" class="connection-hint trace-hint">
+          <span class="dot ok"></span> 本轮 traceId：{{ chatStore.lastTrace.traceId }}
         </div>
 
         <div class="chat-container">
@@ -214,9 +215,25 @@ onUnmounted(() => {
           </div>
 
           <MessageList :messages="chatStore.messages" :loading="chatStore.loading">
+            <!-- Agent 执行步骤提示（ReAct：边检索/调工具边告诉用户"在做什么"） -->
+            <div v-if="chatStore.agentSteps.length" class="agent-steps">
+              <span
+                v-for="s in chatStore.agentSteps"
+                :key="s.step"
+                class="agent-step"
+                :class="{ done: !s.text.endsWith('思考中…') }"
+              >
+                {{ s.text }}
+              </span>
+            </div>
             <ChatMessage v-for="(msg, i) in chatStore.messages" :key="i" :message="msg" />
           </MessageList>
-          <ChatInput :loading="chatStore.loading" @send-text="handleSendText" />
+          <ChatInput
+            :loading="chatStore.loading"
+            :streaming="chatStore.loading"
+            @send-text="handleSendText"
+            @stop="chatStore.stopGenerating()"
+          />
         </div>
       </div>
 
@@ -306,7 +323,13 @@ onUnmounted(() => {
 .chat-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .connection-hint { display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: #fdf6ec; border-radius: 6px; color: #e6a23c; font-size: 12px; flex-shrink: 0; }
 .connection-hint .dot { width: 6px; height: 6px; border-radius: 50%; background: #e6a23c; animation: blink 1.5s ease-in-out infinite; }
+.connection-hint .dot.ok { background: #67c23a; animation: none; }
+.trace-hint { background: #f0f9eb; color: #67c23a; font-family: monospace; }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+/* Agent 步骤提示：小、低调，不抢正文的注意力 */
+.agent-steps { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; }
+.agent-step { font-size: 11px; color: #909399; background: #f4f4f5; border-radius: 10px; padding: 2px 10px; }
+.agent-step.done { color: #67c23a; background: #f0f9eb; }
 .chat-container { flex: 1; display: flex; flex-direction: column; background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); overflow: hidden; min-height: 0; }
 .interest-tags { padding: 20px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
 .tags-title { font-size: 14px; color: #606266; margin-bottom: 12px; }

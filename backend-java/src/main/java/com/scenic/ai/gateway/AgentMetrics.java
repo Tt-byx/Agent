@@ -89,6 +89,22 @@ public class AgentMetrics {
         }
     }
 
+    /**
+     * 2026-10-29（D33）· 流式路径的**估算** token（厂商不返回 usage 时的兜底）。
+     *
+     * <p>刻意用**独立的指标名**而不是给 {@code scenic.llm.tokens.*} 加标签：
+     * 同一个指标名混两种标签集，Prometheus 查询会变得很难写（要处处 {@code sum without(estimated)}），
+     * 而且容易被误读成「真实用量」。分开之后，「缺口有多大」一眼可见 —— 这比数字好看重要。
+     */
+    public void tokensEstimated(Integer input, Integer output, String route) {
+        if (input != null) {
+            registry.counter("scenic.llm.tokens.estimated.input", "route", route).increment(input);
+        }
+        if (output != null) {
+            registry.counter("scenic.llm.tokens.estimated.output", "route", route).increment(output);
+        }
+    }
+
     // ───────────────────────── 工具 ─────────────────────────
 
     /** Wave 3 · 工具调用（带工具名标签，可定位到具体是哪个工具不健康） */

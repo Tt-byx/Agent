@@ -4,6 +4,7 @@ import com.scenic.ai.dto.Result;
 import com.scenic.ai.entity.MessageFeedback;
 import com.scenic.ai.mapper.MessageFeedbackMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.scenic.ai.security.CurrentUser;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,9 +22,25 @@ public class FeedbackController {
     /** 提交反馈 */
     @PostMapping
     public Result<String> submitFeedback(@RequestBody Map<String, Object> body) {
-        Long messageId = Long.valueOf(body.get("messageId").toString());
+        // 2026-10-29（D04）：身份只从认证上下文取，**忽略 body 里的 userId**。
+        // 原实现直接读 body.get("userId")，已登录用户 A 传 {"messageId":123,"userId":8}
+        // 就能把 B 的 like 改成 dislike（updateById 改的是 B 那条记录）。
+        // 这条与本项目 resolveMemoryKey 已建立的标准一致：客户端能写的字段是「声明」，不是身份。
+        Long userId = CurrentUser.id();
+        if (userId == null) {
+            return Result.error(401, "未登录");
+        }
+
+        if (body.get("messageId") == null) {
+            return Result.error(400, "messageId 不能为空");
+        }
+        Long messageId;
+        try {
+            messageId = Long.valueOf(body.get("messageId").toString());
+        } catch (NumberFormatException e) {
+            return Result.error(400, "messageId 必须是数字");
+        }
         String type = (String) body.get("type");
-        Long userId = body.get("userId") != null ? Long.valueOf(body.get("userId").toString()) : null;
 
         if (!"like".equals(type) && !"dislike".equals(type)) {
             return Result.error(400, "type 必须为 like 或 dislike");
@@ -31,10 +48,8 @@ public class FeedbackController {
 
         // 查询是否已有反馈（同一用户同一消息只能反馈一次，可改）
         LambdaQueryWrapper<MessageFeedback> wrapper = new LambdaQueryWrapper<MessageFeedback>()
-                .eq(MessageFeedback::getMessageId, messageId);
-        if (userId != null) {
-            wrapper.eq(MessageFeedback::getUserId, userId);
-        }
+                .eq(MessageFeedback::getMessageId, messageId)
+                .eq(MessageFeedback::getUserId, userId);
         MessageFeedback existing = feedbackMapper.selectOne(wrapper);
 
         if (existing != null) {

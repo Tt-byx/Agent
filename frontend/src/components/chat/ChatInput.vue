@@ -1,10 +1,14 @@
 <script setup>
 import { ref } from 'vue'
 
-const emit = defineEmits(['sendText'])
+const emit = defineEmits(['sendText', 'stop'])
 
 const props = defineProps({
   loading: {
+    type: Boolean,
+    default: false,
+  },
+  streaming: {
     type: Boolean,
     default: false,
   },
@@ -18,6 +22,10 @@ function handleSend() {
   if (!text || props.loading) return
   emit('sendText', text)
   inputText.value = ''
+}
+
+function handleStop() {
+  emit('stop')
 }
 
 function handleKeydown(e) {
@@ -42,8 +50,16 @@ function handleKeydown(e) {
 
     <div class="button-group">
       <el-button
+        v-if="streaming"
+        type="danger"
+        plain
+        @click="handleStop"
+      >
+        停止生成
+      </el-button>
+      <el-button
         type="primary"
-        :loading="loading"
+        :loading="loading && !streaming"
         :disabled="!inputText.trim()"
         @click="handleSend"
       >

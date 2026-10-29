@@ -49,8 +49,14 @@ function formatTime(timestamp) {
     <div class="content-wrapper">
       <div class="bubble" :class="message.role">
         <span class="text">{{ message.content }}</span>
+        <span v-if="message.streaming" class="cursor">▍</span>
       </div>
-      <div class="time">{{ formatTime(message.timestamp) }}</div>
+      <div class="meta-row">
+        <span class="time">{{ formatTime(message.timestamp) }}</span>
+        <span v-if="message.ttft" class="metric" title="首字延迟 / 总耗时">
+          首字 {{ message.ttft }}ms · 总 {{ message.elapsed }}ms
+        </span>
+      </div>
       <!-- 反馈按钮：仅 AI 消息显示 -->
       <div v-if="message.role === 'assistant' && !message.isError" class="feedback-bar">
         <button
@@ -128,6 +134,31 @@ function formatTime(timestamp) {
   font-size: 12px;
   color: #909399;
   margin-top: 4px;
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.metric {
+  font-size: 11px;
+  color: #c0c4cc;
+}
+
+/* 流式输出的光标：闪烁提示"正在生成" */
+.cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: #409eff;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .feedback-bar {

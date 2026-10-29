@@ -85,7 +85,12 @@ public class HybridRetriever {
         // 1. 向量路（取候选池，先不设阈值）
         List<RagRetriever.RetrievedChunk> vectorHits = vectorRetriever.retrieve(query, poolSize, 0.0);
         // 2. 关键词路
-        List<Bm25Index.Scored> lexicalHits = bm25Index.search(query);
+        // D11：search 直接返回带内容的 Hit，不再需要拿 index 回查 ——
+        // 原来 chunkAt(lexicalHits.get(rank).index()) 是一个「跨快照会失效」的句柄，
+        // reload 之后同一个下标可能指向另一条切片。
+        // D24：关键词路与向量路取同样大的候选池（poolSize），
+        // 否则 RRF 融合时两路候选数差 4 倍（5 vs 20），关键词路的长尾命中永远进不了池子。
+        List<Bm25Index.Hit> lexicalHits = bm25Index.search(query, poolSize);
 
         // 3. RRF 融合
         Map<String, Double> fusedScores = new LinkedHashMap<>();
@@ -97,10 +102,11 @@ public class HybridRetriever {
             fusedScores.merge(chunk.text(), 1.0 / (RRF_K + rank + 1), Double::sum);
         }
         for (int rank = 0; rank < lexicalHits.size(); rank++) {
-            Bm25Index.Chunk chunk = bm25Index.chunkAt(lexicalHits.get(rank).index());
-            byText.putIfAbsent(chunk.text(),
-                    new RagRetriever.RetrievedChunk(chunk.text(), chunk.docTitle(), lexicalHits.get(rank).score()));
-            fusedScores.merge(chunk.text(), 1.0 / (RRF_K + rank + 1), Double::sum);
+            Bm25Index.Hit hit = lexicalHits.get(rank);
+            String text = hit.chunk().text();
+            byText.putIfAbsent(text,
+                    new RagRetriever.RetrievedChunk(text, hit.chunk().docTitle(), hit.score()));
+            fusedScores.merge(text, 1.0 / (RRF_K + rank + 1), Double::sum);
         }
 
         List<RagRetriever.RetrievedChunk> merged = fusedScores.entrySet().stream()
@@ -137,22 +143,45 @@ public class HybridRetriever {
         return result;
     }
 
-    /** 把上下文拼装成注入提示词的文本（格式与 P3 一致） */
+    /**
+     * 把上下文拼装成注入提示词的文本（格式与 P3 一致）。
+     *
+     * <p>2026-10-29（D23）：超预算时**整块丢弃**，不再事后一刀切。
+     * 原实现是拼完整个字符串再 {@code substring(0, maxContextChars)}，
+     * 截断点可能落在半句话、甚至半个词中间 —— 模型会读到
+     * 「【参考资料5】(来源: …) 灵山大佛通高 88」这种断头内容，
+     * 比少给一条参考资料更糟：它看起来像一条完整信息，但语义不完整。
+     *
+     * <p>现在逐块累加，放不下就停在这一块之前。这样每一条注入的参考资料都是完整的。
+     */
     public String toContext(List<RagRetriever.RetrievedChunk> chunks, int maxContextChars) {
         if (chunks.isEmpty()) {
             return "";
         }
         StringBuilder sb = new StringBuilder();
+        int used = 0;
         for (int i = 0; i < chunks.size(); i++) {
+            RagRetriever.RetrievedChunk chunk = chunks.get(i);
+            String block = "【参考资料" + (i + 1) + "】(来源: " + chunk.docTitle() + ")\n" + chunk.text();
+            int cost = block.length() + (sb.length() > 0 ? 2 : 0);
+            if (used + cost > maxContextChars) {
+                if (sb.length() == 0) {
+                    // 第一条就超预算：仍然给它，否则「预算配小了」会变成「完全没有参考资料」。
+                    // 这是唯一保留的「超预算」路径，属于配置异常时的兜底。
+                    log.warn("上下文预算 {} 字小于最小切片（{} 字），仍注入第一条", maxContextChars, cost);
+                    sb.append(block);
+                } else {
+                    log.info("上下文预算 {} 字：自第 {} 条起放不下，本轮注入 {} 条",
+                            maxContextChars, i + 1, i);
+                }
+                break;
+            }
             if (sb.length() > 0) {
                 sb.append("\n\n");
             }
-            RagRetriever.RetrievedChunk chunk = chunks.get(i);
-            sb.append("【参考资料").append(i + 1).append("】(来源: ")
-                    .append(chunk.docTitle()).append(")\n")
-                    .append(chunk.text());
+            sb.append(block);
+            used += cost;
         }
-        String context = sb.toString();
-        return context.length() > maxContextChars ? context.substring(0, maxContextChars) + "..." : context;
+        return sb.toString();
     }
 }

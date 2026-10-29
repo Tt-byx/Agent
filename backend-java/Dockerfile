@@ -4,7 +4,8 @@
 # 运行：见仓库根目录 docker-compose.yml 的 app 服务（profile=full）
 
 # ── 构建阶段 ──
-FROM maven:3.9-eclipse-temurin-17 AS build
+# 用本机已有镜像的 tag（alpine 变体），避免构建时还要联网拉基础镜像
+FROM maven:3.9.6-eclipse-temurin-17-alpine AS build
 WORKDIR /app
 
 # 先只拷 pom 并拉依赖：依赖没变时这层会被缓存，后续改代码不会重新下载
@@ -15,7 +16,7 @@ COPY src ./src
 RUN mvn -q -B -DskipTests package
 
 # ── 运行阶段 ──
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
 # 时区与编码：日志和定时相关逻辑都依赖它

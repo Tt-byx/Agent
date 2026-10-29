@@ -102,7 +102,9 @@ public class RagAdminController {
         }
 
         List<Object> results = new ArrayList<>();
+        //从 dir 目录开始，递归遍历它下面的所有文件和子目录，生成一个由路径组成的流
         try (Stream<Path> stream = Files.walk(dir)) {
+            //从一批路径中筛选出"受支持的普通文件"，并按路径排序，最后收集成一个 List
             List<Path> files = stream
                     .filter(Files::isRegularFile)
                     .filter(p -> DocumentTextExtractor.SUPPORTED_TYPES.contains(extension(p)))

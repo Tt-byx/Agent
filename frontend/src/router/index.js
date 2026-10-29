@@ -71,6 +71,16 @@ const routes = [
         name: 'AdminMarketingReport',
         component: () => import('@/views/admin/MarketingReportView.vue'),
       },
+      {
+        path: 'ops',
+        name: 'AdminOps',
+        component: () => import('@/views/admin/OpsView.vue'),
+      },
+      {
+        path: 'rag-console',
+        name: 'AdminRagConsole',
+        component: () => import('@/views/admin/RagConsoleView.vue'),
+      },
     ],
   },
 ]

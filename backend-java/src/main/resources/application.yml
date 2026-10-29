@@ -81,6 +81,13 @@ llm:
     failure-rate-threshold: 50
     wait-duration-seconds: 30
     half-open-calls: 2
+    # 2026-10-29（D28）· 慢调用也算故障。
+    # LLM 最典型的故障不是报错而是「变慢」：状态码仍是 200，失败率 0%，
+    # 只按失败率熔断的话熔断器永远不打开，每个用户都白等。
+    # 40s 是有意放宽的：一次长回答 10~20s 属正常，压到 20s 会误熔断；
+    # 慢调用率到 80% 才打开，给偶发抖动留余量。
+    slow-call-duration-seconds: 40
+    slow-call-rate-threshold: 80
   # P8 · 备用模型（同厂商双档降级）：主模型 deepseek-flash 异常时自动切 deepseek-v4-pro。
   # 注意：硅基流动的 key 只用于 embedding 与 rerank，不做对话模型。
   fallback:
@@ -175,6 +182,13 @@ memory:
     top-k: 3
     # 相似度下限（越高越严格）
     min-score: 0.55
+    # 2026-10-29（D18）· 语义去重阈值：新偏好与已有记忆相似度 ≥ 此值即视为同一条，跳过写入。
+    # 用语义而不是字符串：模型每次措辞都不同（「喜欢拍照」/「对摄影有兴趣」）。
+    # 调低会误判（把「喜欢爬山」和「不想爬山」当成同一条），所以取 0.95 这种高阈值。
+    duplicate-score: 0.95
+    # 每人最多保留多少条偏好；超出后按 created_at 淘汰最旧的。
+    # 长期记忆表没有 TTL，不设上限就会无限增长（还要为每条付一次 embedding 调用）。
+    max-facts-per-visitor: 40
 
 # P8 · 语义缓存：命中后直接返回缓存答案，不再调用模型
 cache:
@@ -191,14 +205,26 @@ cache:
 gateway:
   rate-limit:
     enabled: true
-    # 每个游客（visitorId/IP）每分钟最多的对话请求数
+    # 每个身份每分钟最多的对话请求数。
+    # 维度优先级（见 IdentityResolver）：登录 user:{id} → 游客 visitor:{vid} → 客户端 IP。
+    # 注意：**不再使用 body 里的 visitorId** —— 那是客户端自己写的，换个值就是一批新配额。
     per-minute: 20
+    # 2026-10-29（D05）· 是否信任 X-Forwarded-For（默认 false）。
+    # false：只用 request.getRemoteAddr()，客户端伪造任何头都换不来新配额。
+    # 只有部署在可信反向代理之后才置 true；届时取 XFF 的**最后一段**（离服务端最近的一跳），
+    # 因为第一段是客户端自己塞进去的，永远可伪造。
+    trust-forwarded-for: ${SCENIC_TRUST_FORWARDED_FOR:false}
   # Wave 4 · 幂等：带 requestId 的重复提交只真正执行一次
   idempotency:
     # 首次结果保留多久（期间重复提交直接复用）
     ttl-minutes: 30
-    # 「处理中」占位锁的时长；处理失败后锁到期即可重试
-    lock-seconds: 60
+    # 「处理中」占位锁的时长；处理失败后锁到期即可重试。
+    # 2026-10-29（D17）：60 → 150。依据是「静态 TTL 按最坏情况设，不按平均情况设」：
+    # Agent 最坏要跑 agent.timeout-seconds=120s，锁只有 60s 的话，
+    # 第 60~120 秒之间第二个重复请求能拿到锁 → 重复跑一遍完整链路，
+    # 也就是「幂等保护在最需要它的时候失效」。这里留 30s 余量。
+    # 反面是崩溃后最多要等 150s 才能重试，这个代价可以接受。
+    lock-seconds: 150
 
 # Wave 4 · 成本台账单价（元 / 千 token）。
 # 仅用于「量级估算」，不代表真实账单；接入实际采购价后可直接替换。
@@ -217,10 +243,10 @@ management:
       exposure:
         include: health,info,metrics,prometheus
 
-# WebSocket 配置
-websocket:
-  max-text-message-size: 65536
-  max-binary-message-size: 10485760
+# 2026-10-29（D30）：原来的 websocket.* 配置段已删除。
+# 那两个 key（max-text-message-size / max-binary-message-size）从来没有被任何代码读取过 ——
+# 它们是死配置：看起来能调，改了没反应，比没有配置更误导。
+# WebSocket 链路已整体移除，对话走 /api/chat 与 /api/chat/stream（SSE）。
 
 # 日志
 logging:
@@ -231,7 +257,7 @@ logging:
     # 一次请求跨 Controller→ChatService→AgentLoop→Toolbox→Model 的日志从此可以串联排查
     console: "%d{HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{36} - %msg%n"
 
-# 文件上传目录
+# 文件上传目录（容器里指向挂载点 /data/scenic_uploads，宿主机开发用默认路径）
 scenic:
   upload:
-    dir: D:/scenic_uploads
+    dir: ${SCENIC_UPLOAD_DIR:D:/scenic_uploads}

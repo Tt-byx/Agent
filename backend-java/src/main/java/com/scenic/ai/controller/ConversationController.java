@@ -132,11 +132,25 @@ public class ConversationController {
         Set<Long> titleMatchIds = titleMatches.stream().map(Conversation::getId).collect(Collectors.toSet());
         List<Conversation> contentMatches = new ArrayList<>();
         if (hasKeyword) {
-            LambdaQueryWrapper<ChatMessage> msgQuery = new LambdaQueryWrapper<ChatMessage>()
-                    .like(ChatMessage::getContent, kw)
-                    .select(ChatMessage::getConversationId);
-            List<Long> msgConvIds = chatMessageMapper.selectList(msgQuery).stream()
-                    .map(ChatMessage::getConversationId).distinct().collect(Collectors.toList());
+            // 2026-10-29（D31）· 先把范围收窄到「这个用户的会话」，再 like 消息内容。
+            // 原实现直接对 chat_message **全表** like（没有任何 userId 条件），
+            // 拿到命中消息的 conversationId 之后才按 userId 过滤会话。
+            // 功能上结果是对的，但代价是：① 每次搜索全表扫描，数据量上来后必然拖垮；
+            // ② 把别人的 conversationId 临时带进了内存 —— 虽然不会返回给前端，但没有必要。
+            List<Long> myConvIds = conversationMapper.selectList(
+                            new LambdaQueryWrapper<Conversation>()
+                                    .eq(Conversation::getUserId, userId)
+                                    .eq(Conversation::getStatus, 1)
+                                    .select(Conversation::getId))
+                    .stream().map(Conversation::getId).toList();
+
+            List<Long> msgConvIds = myConvIds.isEmpty() ? List.of()
+                    : chatMessageMapper.selectList(
+                            new LambdaQueryWrapper<ChatMessage>()
+                                    .in(ChatMessage::getConversationId, myConvIds)
+                                    .like(ChatMessage::getContent, kw)
+                                    .select(ChatMessage::getConversationId))
+                    .stream().map(ChatMessage::getConversationId).distinct().toList();
 
             if (!msgConvIds.isEmpty()) {
                 List<Long> newIds = msgConvIds.stream().filter(id -> !titleMatchIds.contains(id)).collect(Collectors.toList());

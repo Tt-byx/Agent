@@ -3,7 +3,6 @@ package com.scenic.ai.agent.core;
 import com.scenic.ai.gateway.AgentMetrics;
 import com.scenic.ai.gateway.SemanticCache;
 import com.scenic.ai.memory.LongTermMemory;
-import com.scenic.ai.memory.MemoryContextHolder;
 import com.scenic.ai.memory.ShortTermMemory;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
@@ -16,6 +15,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -24,6 +24,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * P7 · ReAct Agent 循环（reason → act → observe），由本项目**自己实现**而不是交给框架黑盒。
@@ -72,6 +74,8 @@ public class AgentLoop {
     private final int maxContextChars;
     /** Wave 5 · 流式路径专用（SSE）；同步路径仍用 chatModel */
     private final StreamingChatModel streamingChatModel;
+    /** 2026-10-29（D13）· 摘要异步执行（单线程，保证同一会话的摘要串行、不互相覆盖） */
+    private final Executor summaryExecutor;
 
     public AgentLoop(ChatModel chatModel,
                      StreamingChatModel streamingChatModel,
@@ -80,6 +84,7 @@ public class AgentLoop {
                      LongTermMemory longTermMemory,
                      SemanticCache semanticCache,
                      AgentMetrics metrics,
+                     @Qualifier("summaryExecutor") Executor summaryExecutor,
                      @Value("${agent.max-steps:6}") int maxSteps,
                      @Value("${agent.timeout-seconds:120}") long timeoutSeconds,
                      @Value("${agent.max-tools-per-step:4}") int maxToolsPerStep,
@@ -93,12 +98,14 @@ public class AgentLoop {
         this.longTermMemory = longTermMemory;
         this.semanticCache = semanticCache;
         this.metrics = metrics;
+        this.summaryExecutor = summaryExecutor;
         this.maxSteps = Math.max(maxSteps, 1);
         this.timeoutSeconds = timeoutSeconds;
         // Wave 1 · 单步工具上限：模型一次返回过多工具调用会放大延迟与成本
         this.maxToolsPerStep = Math.max(1, maxToolsPerStep);
         // Wave 6 · 上下文预算：至少留 1000 字，否则连人设都放不下
         this.maxContextChars = Math.max(1000, maxContextChars);
+        // 从 classpath（类路径）中读取一个文本文件，把它的全部内容作为字符串加载到内存，赋值给 baseSystemPrompt 字段
         this.baseSystemPrompt = new ClassPathResource(systemPromptPath)
                 .getContentAsString(StandardCharsets.UTF_8);
         log.info("AgentLoop 就绪：最大步数 {}，整体超时 {}s，单步工具上限 {}，工具 {} 个",
@@ -129,6 +136,8 @@ public class AgentLoop {
         var cached = semanticCache.lookup(userMessage);
         if (cached.isPresent()) {
             metrics.cacheHit();
+            // D16：命中缓存也要记进滑窗，否则下一轮的指代（"它"）无处可解
+            recordTurn(sessionId, userMessage, cached.get());
             log.info("[CACHE] 命中，跳过 Agent 循环（question={}）", userMessage);
             return new Result(cached.get(), List.of(), 0, true, "CACHE_HIT");
         }
@@ -146,7 +155,10 @@ public class AgentLoop {
             if (System.currentTimeMillis() > deadline) {
                 log.warn("Agent 整体超时（{}s），已执行 {} 步，降级返回", timeoutSeconds, step - 1);
                 metrics.runAborted();
-                return new Result(convergeAfterAbort(messages), trace, step - 1, false, "TIMEOUT");
+                String closing = convergeAfterAbort(messages);
+                // D16：超时也记录（有内容才记），下一轮才有上下文
+                recordDegradedTurn(sessionId, userMessage, closing);
+                return new Result(closing, trace, step - 1, false, "TIMEOUT");
             }
 
             AiMessage aiMessage;
@@ -178,53 +190,62 @@ public class AgentLoop {
                 }
                 metrics.runConverged();
                 rememberTurn(sessionId, userMessage, answer);
-                semanticCache.store(userMessage, answer);
+                // D03：本轮用过工具的，答案里很可能含**时效性数据**（天气 / 演出场次 / 拥挤度），
+                // 写进 24 小时 TTL 的语义缓存，就等于把昨天下午的天气发给下一位游客。
+                // 缓存只留给「纯知识类」回答（模型直接依据系统提示词与人设作答，无工具参与）。
+                if (trace.isEmpty()) {
+                    semanticCache.store(userMessage, answer);
+                } else {
+                    log.info("[CACHE] 本轮调用过 {} 次工具，跳过缓存写入（答案可能含时效性数据）",
+                            trace.size());
+                }
                 log.info("Agent 收敛：共 {} 步、{} 次工具调用", step, trace.size());
                 return new Result(answer, trace, step, true, "CONVERGED");
             }
 
-            // act → observe（工具执行期间暴露 memoryKey，供记忆类工具写入）
-            MemoryContextHolder.set(memoryKey);
-            try {
-                List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
-                // Wave 1 · 单步工具数上限：超出部分不执行，直接以失败文本回灌，
-                // 让模型知道"这一步要的太多了"，而不是无限放大本步的耗时与成本。
-                if (requests.size() > maxToolsPerStep) {
-                    log.warn("第 {} 步请求了 {} 个工具，超过单步上限 {}，仅执行前 {} 个",
-                            step, requests.size(), maxToolsPerStep, maxToolsPerStep);
-                }
-                for (int i = 0; i < requests.size(); i++) {
-                    ToolExecutionRequest request = requests.get(i);
+            // act → observe
+            // 记忆归属键通过 execute 的第二个参数（memoryId）传给工具，
+            // 由 @ToolMemoryId 标注的参数接收 —— 不再依赖 ThreadLocal（D01：工具跑在
+            // 独立线程池里，ThreadLocal 跨不过去，记忆写入曾经因此 100% 失败）
+            List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+            // Wave 1 · 单步工具数上限：超出部分不执行，直接以失败文本回灌，
+            // 让模型知道"这一步要的太多了"，而不是无限放大本步的耗时与成本。
+            if (requests.size() > maxToolsPerStep) {
+                log.warn("第 {} 步请求了 {} 个工具，超过单步上限 {}，仅执行前 {} 个",
+                        step, requests.size(), maxToolsPerStep, maxToolsPerStep);
+            }
+            for (int i = 0; i < requests.size(); i++) {
+                ToolExecutionRequest request = requests.get(i);
 
-                    if (i >= maxToolsPerStep) {
-                        metrics.toolFailed(request.name());
-                        String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
-                                + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
-                        trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
-                        messages.add(ToolExecutionResultMessage.from(request, rejected));
-                        continue;
-                    }
-
-                    // Wave 3：工具指标带工具名，并记录单步耗时（phase=tool）
-                    metrics.toolCalled(request.name());
-                    long toolStart = System.currentTimeMillis();
-                    String observation = agentToolbox.execute(request, sessionId);
-                    metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
-                    boolean failed = observation.contains("执行失败：");
-                    if (failed) {
-                        metrics.toolFailed(request.name());
-                    }
-                    trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
-                    messages.add(ToolExecutionResultMessage.from(request, observation));
+                if (i >= maxToolsPerStep) {
+                    metrics.toolFailed(request.name());
+                    String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
+                            + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
+                    trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
+                    messages.add(ToolExecutionResultMessage.from(request, rejected));
+                    continue;
                 }
-            } finally {
-                MemoryContextHolder.clear();
+
+                // Wave 3：工具指标带工具名，并记录单步耗时（phase=tool）
+                metrics.toolCalled(request.name());
+                long toolStart = System.currentTimeMillis();
+                String observation = agentToolbox.execute(request, memoryKey);
+                metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
+                boolean failed = observation.contains("执行失败：");
+                if (failed) {
+                    metrics.toolFailed(request.name());
+                }
+                trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
+                messages.add(ToolExecutionResultMessage.from(request, observation));
             }
         }
 
         log.warn("Agent 达到最大步数 {}，触发强制收口", maxSteps);
         metrics.runAborted();
-        return new Result(convergeAfterAbort(messages), trace, maxSteps, false, "MAX_STEPS");
+        String closing = convergeAfterAbort(messages);
+        // D16：步数上限也记录（有内容才记）
+        recordDegradedTurn(sessionId, userMessage, closing);
+        return new Result(closing, trace, maxSteps, false, "MAX_STEPS");
     }
 
     /**
@@ -238,6 +259,16 @@ public class AgentLoop {
      *   onDone      → 最终完整答案（前端用它做兜底校验）
      */
     public interface StreamSink {
+        /**
+         * 会话标识下发（Wave 5 补漏）。
+         *
+         * 为什么需要：sessionId 由**服务端**在首次对话时生成（见 ChatServiceImpl.chatStream），
+         * 若不下发给前端，前端就无从把后续消息关联到同一会话 —— 表现为「每次提问都新建会话，
+         * 历史对话列表里一堆一条消息的会话」，且客户端重放时可能命中别人的会话归属校验。
+         * 因此在会话确定后、生成开始前，先把它推给前端。
+         */
+        default void onSession(String sessionId) {}
+
         default void onStepStart(int step) {}
 
         void onToken(int step, String token);
@@ -249,6 +280,21 @@ public class AgentLoop {
         void onDone(String answer);
 
         void onError(String message);
+
+        /**
+         * 2026-10-29（D14）· 客户端是否已经离开。
+         *
+         * <p>默认 {@code false}：同步路径没有「取消」这个概念，其它实现（测试桩）也不必被迫关心它。
+         * SSE 路径由 {@code ChatController} 绑定到 emitter 的断连标记上。
+         *
+         * <p>为什么需要这个回调：{@code push()} 在 send 失败时会置位「客户端已断」，
+         * 但那个标记只在 push 内部自查 —— 循环完全不知道。于是用户关掉页面后，
+         * 服务端照样跑满 120 秒、照样调工具、照样烧 token。流式接口比同步更糟：
+         * 同步接口至少「写响应失败」会让请求早点结束，流式的写失败被 push 吞掉了。
+         */
+        default boolean isCancelled() {
+            return false;
+        }
     }
 
     /**
@@ -274,6 +320,8 @@ public class AgentLoop {
         if (cached.isPresent()) {
             metrics.cacheHit();
             String answer = cached.get();
+            // D16：命中缓存同样要记进滑窗（与同步路径一致）
+            recordTurn(sessionId, question, answer);
             // 缓存命中也以 token 事件下发：前端只维护一条渲染路径（收到 token 就追加），
             // 不必为「缓存命中」单独写分支。内容与 done 完全一致，只是少了逐字延迟。
             sink.onToken(0, answer);
@@ -291,10 +339,19 @@ public class AgentLoop {
         long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
 
         for (int step = 1; step <= maxSteps; step++) {
+            // D14：每一步开始前先看客户端还在不在。放在模型调用**之前**而不是之后，
+            // 是为了真正省掉下一次模型调用 —— 那才是成本大头。
+            if (sink.isCancelled()) {
+                metrics.degrade("client_gone");
+                log.info("[STREAM] 客户端已断开，第 {} 步前中止（已执行 {} 步、{} 次工具调用）",
+                        step, step - 1, trace.size());
+                return new Result("", trace, step - 1, false, "CLIENT_GONE");
+            }
             if (System.currentTimeMillis() > deadline) {
                 log.warn("[STREAM] Agent 整体超时（{}s），已执行 {} 步，收口返回", timeoutSeconds, step - 1);
                 metrics.runAborted();
                 String closing = convergeAfterAbort(messages);
+                recordDegradedTurn(sessionId, question, closing);
                 sink.onDone(closing);
                 return new Result(closing, trace, step - 1, false, "TIMEOUT");
             }
@@ -368,7 +425,12 @@ public class AgentLoop {
                 }
                 metrics.runConverged();
                 rememberTurn(sessionId, question, answer);
-                semanticCache.store(question, answer);
+                // D03：同同步路径 —— 用过工具就不写缓存（时效性答案不能跨请求复用）
+                if (trace.isEmpty()) {
+                    semanticCache.store(question, answer);
+                } else {
+                    log.info("[STREAM][CACHE] 本轮调用过 {} 次工具，跳过缓存写入", trace.size());
+                }
                 sink.onStepEnd(step, false);
                 sink.onDone(answer);
                 log.info("[STREAM] Agent 收敛：共 {} 步、{} 次工具调用", step, trace.size());
@@ -378,38 +440,43 @@ public class AgentLoop {
             // 该步请求了工具 → 它的增量文本不是给用户的答案，通知前端撤销
             sink.onDiscard(step);
 
-            MemoryContextHolder.set(memoryKey);
-            try {
-                List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
-                if (requests.size() > maxToolsPerStep) {
-                    log.warn("[STREAM] 第 {} 步请求了 {} 个工具，超过单步上限 {}",
-                            step, requests.size(), maxToolsPerStep);
-                }
-                for (int i = 0; i < requests.size(); i++) {
-                    ToolExecutionRequest request = requests.get(i);
+            // 同同步路径：memoryKey 走 execute 的 memoryId 参数，不再用 ThreadLocal（D01）
+            List<ToolExecutionRequest> requests = aiMessage.toolExecutionRequests();
+            if (requests.size() > maxToolsPerStep) {
+                log.warn("[STREAM] 第 {} 步请求了 {} 个工具，超过单步上限 {}",
+                        step, requests.size(), maxToolsPerStep);
+            }
+            for (int i = 0; i < requests.size(); i++) {
+                ToolExecutionRequest request = requests.get(i);
 
-                    if (i >= maxToolsPerStep) {
-                        metrics.toolFailed(request.name());
-                        String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
-                                + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
-                        trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
-                        messages.add(ToolExecutionResultMessage.from(request, rejected));
-                        continue;
-                    }
-
-                    metrics.toolCalled(request.name());
-                    long toolStart = System.currentTimeMillis();
-                    String observation = toolbox.execute(request, sessionId);
-                    metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
-                    boolean failed = observation.contains("执行失败：");
-                    if (failed) {
-                        metrics.toolFailed(request.name());
-                    }
-                    trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
-                    messages.add(ToolExecutionResultMessage.from(request, observation));
+                // D14：逐个工具检查。已经断连就不必再发起剩下的工具调用。
+                // 这里直接 return 而不是 break —— break 会让循环继续，下一步模型会收到
+                // 「有 tool_calls 却没有对应 tool 结果」的非法消息序列。
+                if (sink.isCancelled()) {
+                    metrics.degrade("client_gone");
+                    log.info("[STREAM] 客户端已断开，跳过剩余 {} 个工具调用", requests.size() - i);
+                    return new Result("", trace, step, false, "CLIENT_GONE");
                 }
-            } finally {
-                MemoryContextHolder.clear();
+
+                if (i >= maxToolsPerStep) {
+                    metrics.toolFailed(request.name());
+                    String rejected = "工具「" + request.name() + "」执行失败：单步工具调用数超过上限（"
+                            + maxToolsPerStep + "），本次未执行。请在下一步再调用它。";
+                    trace.add(new Step(step, request.name(), request.arguments(), rejected, true));
+                    messages.add(ToolExecutionResultMessage.from(request, rejected));
+                    continue;
+                }
+
+                metrics.toolCalled(request.name());
+                long toolStart = System.currentTimeMillis();
+                String observation = toolbox.execute(request, memoryKey);
+                metrics.agentStep(step, "tool", System.currentTimeMillis() - toolStart);
+                boolean failed = observation.contains("执行失败：");
+                if (failed) {
+                    metrics.toolFailed(request.name());
+                }
+                trace.add(new Step(step, request.name(), request.arguments(), observation, failed));
+                messages.add(ToolExecutionResultMessage.from(request, observation));
             }
             sink.onStepEnd(step, true);
         }
@@ -417,6 +484,7 @@ public class AgentLoop {
         log.warn("[STREAM] 达到最大步数 {}，触发强制收口", maxSteps);
         metrics.runAborted();
         String closing = convergeAfterAbort(messages);
+        recordDegradedTurn(sessionId, question, closing);
         sink.onDone(closing);
         return new Result(closing, trace, maxSteps, false, "MAX_STEPS");
     }
@@ -479,19 +547,75 @@ public class AgentLoop {
         return sb.toString();
     }
 
-    /** 记录本轮对话，并在超出滑窗时把溢出部分摘要化 */
-    private void rememberTurn(String sessionId, String question, String answer) {
+    /**
+     * 只记录本轮，**不触发摘要**。
+     *
+     * <p>2026-10-29（D16）：缓存命中 / 整体超时 / 达到步数上限这三条路径原先都不记录，
+     * 于是下一轮出现「那它门票多少钱」时，"它"在滑窗里找不到指代对象 —— 上下文断裂。
+     * 缓存省掉的是「**生成**」，不该省掉「**记录**」：记录是对话系统的基本义务，不是额外开销。
+     *
+     * <p>为什么刻意不摘要：摘要要调一次 LLM（最坏 120s）。在已经超时的路径上再调一次，
+     * 等于把超时的请求拖得更久。这三条路径本来就不是「正常轮次」，跳过摘要是最小惊讶的选择。
+     */
+    private void recordTurn(String sessionId, String question, String answer) {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
         shortTermMemory.append(sessionId, "user", question);
         shortTermMemory.append(sessionId, "assistant", answer);
+    }
+
+    /**
+     * 降级路径（超时 / 步数上限）的记录：只有真的产出了内容才写。
+     * 力竭时返回的是统一的道歉话术，把它当一条「AI 回答」记进滑窗，
+     * 下一轮模型会看到自己刚道过歉，容易继续道歉。
+     */
+    private void recordDegradedTurn(String sessionId, String question, String answer) {
+        if (FALLBACK_ANSWER.equals(answer)) {
+            return;
+        }
+        recordTurn(sessionId, question, answer);
+    }
+
+    /** 记录本轮对话，并在超出滑窗时把溢出部分摘要化（仅正常收敛路径使用） */
+    private void rememberTurn(String sessionId, String question, String answer) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        recordTurn(sessionId, question, answer);
 
         long size = shortTermMemory.size(sessionId);
         // Wave 6 · 修 B3：窗口容量来自配置（memory.short-term.max-turns），不再硬编码 20
         int window = shortTermMemory.windowSize();
         if (size > window) {
             List<ShortTermMemory.Turn> drained = shortTermMemory.drain(sessionId, size - window);
+            submitSummary(sessionId, drained);
+        }
+    }
+
+    /**
+     * 把摘要任务提交到后台（D13）。
+     *
+     * <p>原实现是**同步**调 {@code summarize()}：答案早就生成好了，用户却要等摘要模型跑完才拿到响应；
+     * 更糟的是这段耗时挂在 deadline 检查**之外**（deadline 只在 for 循环开头看一次，
+     * 收敛后直接 return，不会再回到检查点）—— 超时机制根本管不到它。
+     * 结果 {@code agent.timeout-seconds=120} 的真实最坏等待是 120s（循环）+ 120s（摘要）。
+     *
+     * <p>用单线程执行器：同一会话的两次摘要必须串行。摘要的写法是「读旧摘要 → 拼新内容 → 覆盖写回」，
+     * 并发跑必然后写覆盖先写，丢掉一批对话。
+     *
+     * <p>队列满时降级为同步执行：此时 {@code drain} 已经把消息从 Redis 移除了，
+     * 摘要是它们唯一的去处 —— 宁可这一轮慢一点，也不能丢掉。
+     */
+    private void submitSummary(String sessionId, List<ShortTermMemory.Turn> drained) {
+        if (drained == null || drained.isEmpty()) {
+            return;
+        }
+        try {
+            summaryExecutor.execute(() -> summarize(sessionId, drained));
+        } catch (RejectedExecutionException e) {
+            log.warn("摘要队列已满，降级为同步执行（宁可慢，也不丢已移出滑窗的 {} 条消息）",
+                    drained.size());
             summarize(sessionId, drained);
         }
     }
@@ -522,7 +646,9 @@ public class AgentLoop {
             String summary = result.text();
             if (summary != null && !summary.isBlank()) {
                 shortTermMemory.setSummary(sessionId, summary.strip());
-                log.info("[MEMORY] 会话摘要已更新（{} 条旧消息被摘要化）", drained.size());
+                // 带上线程名：这是「摘要在后台线程跑、不占请求线程」的直接证据（D13）
+                log.info("[MEMORY] 会话摘要已更新（{} 条旧消息被摘要化，线程={}）",
+                        drained.size(), Thread.currentThread().getName());
             }
         } catch (Exception e) {
             log.warn("会话摘要生成失败（不影响主流程）: {}", e.getMessage());

@@ -11,10 +11,24 @@ async function checkHealth() {
     const res = await request.get('/api/system/health')
     health.value = res || {}
   } catch (e) {
-    health.value = { mysql: { status: 'error' }, python: { status: 'error', message: e.message } }
+    health.value = {
+      mysql: { status: 'error', message: e.message },
+      redis: { status: 'error', message: e.message },
+    }
   } finally {
     loading.value = false
   }
+}
+
+/** 服务名映射：health 返回的 key → 展示名 */
+const SERVICE_NAMES = {
+  mysql: 'MySQL 业务库',
+  redis: 'Redis 缓存',
+  pgvector: 'PostgreSQL 向量库',
+}
+
+function serviceName(key) {
+  return SERVICE_NAMES[key] || key
 }
 
 function statusColor(s) {
@@ -47,7 +61,7 @@ onMounted(checkHealth)
           <el-icon :size="24"><CircleCheckFilled v-if="info.status === 'ok'" /><WarningFilled v-else /></el-icon>
         </div>
         <div class="status-info">
-          <span class="status-name">{{ key === 'mysql' ? 'MySQL 数据库' : 'Python 后端' }}</span>
+          <span class="status-name">{{ serviceName(key) }}</span>
           <span class="status-state" :style="{ color: statusColor(info.status) }">{{ statusLabel(info.status) }}</span>
           <span v-if="info.message" class="status-detail">{{ info.message }}</span>
           <span v-if="info.database" class="status-detail">数据库: {{ info.database }}</span>
@@ -61,23 +75,35 @@ onMounted(checkHealth)
       <div class="info-grid">
         <div class="info-item">
           <span class="info-label">后端框架</span>
-          <span class="info-value">Spring Boot 3.3.5 + FastAPI</span>
+          <span class="info-value">Spring Boot 3.3.5 + LangChain4j（单体）</span>
         </div>
         <div class="info-item">
           <span class="info-label">前端框架</span>
           <span class="info-value">Vue 3 + Element Plus + ECharts</span>
         </div>
         <div class="info-item">
-          <span class="info-label">大模型</span>
-          <span class="info-value">MiMo v2.5 Pro</span>
+          <span class="info-label">对话模型</span>
+          <span class="info-value">DeepSeek（deepseek-flash，OpenAI 兼容）</span>
         </div>
         <div class="info-item">
           <span class="info-label">向量数据库</span>
-          <span class="info-value">ChromaDB（本地持久化）</span>
+          <span class="info-value">PostgreSQL + pgvector</span>
         </div>
         <div class="info-item">
           <span class="info-label">Embedding</span>
           <span class="info-value">SiliconFlow BAAI/bge-m3</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">重排序</span>
+          <span class="info-value">SiliconFlow BAAI/bge-reranker-v2-m3</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">缓存 / 记忆</span>
+          <span class="info-value">Redis（短期记忆 / 限流 / 幂等 / 语义缓存）</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">部署方式</span>
+          <span class="info-value">Docker Compose（全容器化）</span>
         </div>
       </div>
     </div>

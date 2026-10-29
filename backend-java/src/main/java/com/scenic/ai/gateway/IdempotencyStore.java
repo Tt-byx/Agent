@@ -46,9 +46,26 @@ public class IdempotencyStore {
         log.info("幂等存储就绪：结果保留 {} 分钟，处理中锁 {} 秒", this.ttlMinutes, this.lockSeconds);
     }
 
-    /** 组合键：身份 + 请求号 */
+    /**
+     * 组合键：身份 + 请求号。
+     *
+     * <p>2026-10-29（D17）：identity 为空时**返回 null**，不再退化成一个共享的
+     * {@code "anonymous"} 命名空间。原实现在这里把 null 映射成字符串 "anonymous"，
+     * 于是「两个匿名用户 + 同一个 requestId」会撞进同一个键 —— 后者直接拿到前者的答案。
+     *
+     * <p>这个坑特别难看出来，因为 {@code "anonymous"} 是一个**合法但错误**的值：
+     * 非空、能拼 key、能存取，后续所有逻辑都"正常"运行，只是语义错了。
+     *
+     * <p>正确做法是「拿不到可靠身份就放弃幂等」：放弃功能不加风险；
+     * 用默认值继续，是「功能还在、多了个漏洞」。
+     *
+     * @return null 表示无法构成幂等作用域，调用方应跳过幂等
+     */
     public String buildKey(String identity, String requestId) {
-        return (identity == null ? "anonymous" : identity) + ":" + requestId;
+        if (identity == null || identity.isBlank() || requestId == null || requestId.isBlank()) {
+            return null;
+        }
+        return identity + ":" + requestId;
     }
 
     /** 查首次结果；未命中或 Redis 异常都返回 null（幂等是增强，不能反过来阻断主流程） */
