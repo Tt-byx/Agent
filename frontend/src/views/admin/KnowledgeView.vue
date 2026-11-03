@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import {
   uploadKnowledge,
   processKnowledge,
@@ -48,9 +48,6 @@ const fileTypeStyle = {
   pdf:  { color: '#c0705a', bg: '#f5e8e4' },
 }
 
-const isProcessing = computed(() =>
-  documents.value.some((d) => d.vectorStatus === 1)
-)
 
 function handleFileChange(file) {
   selectedFile.value = file.raw
@@ -104,7 +101,7 @@ async function handleProcess(doc) {
     await processKnowledge(doc.id)
     ElMessage.info('开始处理文档...')
     await fetchList()
-    startPolling()
+    startPolling(doc.id)
   } catch (err) {
     ElMessage.error('启动处理失败: ' + (err.message || '未知错误'))
   }
@@ -152,7 +149,7 @@ async function handleReprocess(doc) {
     await reprocessKnowledge(doc.id)
     ElMessage.info('重新处理中...')
     await fetchList()
-    startPolling()
+    startPolling(doc.id)
   } catch (err) {
     ElMessage.error('重处理失败')
   }
@@ -199,12 +196,32 @@ function formatTime(time) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function startPolling() {
-  if (pollTimer) return
-  pollTimer = setInterval(() => {
-    if (isProcessing.value) {
-      fetchList()
-    } else {
+/**
+ * 2026-11-03 修复：轮询改成「盯住某一篇文档，直到它状态确定」。
+ *
+ * 原实现有两个问题，叠加起来会让界面**永远停在「待处理」**：
+ *
+ *   1. 用 `isProcessing`（列表里是否存在 vectorStatus===1）当继续条件。
+ *      但后端处理一份小文档往往 1 秒内就完成，前端第一次 `fetchList()` 拿到的
+ *      可能还是 vectorStatus=0（待处理）—— 于是第一次 tick 判定 `isProcessing=false`，
+ *      直接 `stopPolling()`，之后再没人去取新状态。
+ *   2. `if (pollTimer) return` 会让「上一次的轮询还没停」时的重新启动被忽略，
+ *      连续处理两篇文档时第二篇根本不会被跟踪。
+ *
+ * 现在改成：记录本次要跟踪的 docId，每秒刷新一次，直到这篇文档变成
+ * 已完成(2)/失败(3)、或从列表里消失、或轮询满 60 次（兜底，防后端卡死时无限刷新）。
+ *
+ * @param {number} docId 刚触发处理的那篇文档
+ */
+function startPolling(docId) {
+  stopPolling()
+  let ticks = 0
+  pollTimer = setInterval(async () => {
+    ticks += 1
+    await fetchList()
+    const target = documents.value.find((d) => d.id === docId)
+    const settled = !target || target.vectorStatus === 2 || target.vectorStatus === 3
+    if (settled || ticks >= 60) {
       stopPolling()
     }
   }, 1000)
@@ -257,14 +274,14 @@ onUnmounted(() => {
           drag
           :auto-upload="false"
           :limit="1"
-          accept=".docx,.xlsx"
+          accept=".docx,.xlsx,.txt,.md"
           :on-change="handleFileChange"
           :on-remove="handleFileRemove"
         >
           <div class="upload-inner">
             <el-icon class="upload-icon"><UploadFilled /></el-icon>
             <div class="upload-text">拖拽文件到此处，或 <em>点击选择</em></div>
-            <div class="upload-hint">支持 .docx、.xlsx 格式</div>
+            <div class="upload-hint">支持 .docx、.xlsx、.txt、.md 格式</div>
           </div>
         </el-upload>
 
@@ -429,10 +446,13 @@ onUnmounted(() => {
             >
               <el-icon><RefreshRight /></el-icon> 重试
             </el-button>
+            <!-- 2026-11-03：这是唯一一个「纯图标 + 危险操作」的按钮，
+                 鼠标悬停时给个提示，避免用户不知道垃圾桶是什么意思就点了。 -->
             <el-button
               type="danger"
               size="small"
               text
+              title="删除该文档"
               @click="handleDelete(row)"
             >
               <el-icon><Delete /></el-icon>

@@ -10,6 +10,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -28,10 +29,23 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     @Autowired
     private TourismDataMapper tourismDataMapper;
 
-    @Value("${upload.dir:D:/scenic_uploads}")
+    /**
+     * 2026-11-03 修复：这里原来写的是 {@code @Value("${upload.dir:D:/scenic_uploads}")}，
+     * 但 application.yml 里定义的 key 是 **scenic.upload.dir** —— 名字对不上，
+     * 于是永远取默认值 `D:/scenic_uploads`。
+     *
+     * <p>后果很隐蔽：在宿主机用 IDE 跑时，`D:/scenic_uploads` 真的存在，导入正常；
+     * 一旦进容器（挂载点是 `/data/scenic_uploads`），这个路径根本不存在，
+     * 导入就报「找不到 xlsx 文件」，而错误信息里显示的偏偏是那个宿主机路径，
+     * 看着像「文件没放对」，实际是配置项名字写错了。
+     *
+     * <p>默认值保留，方便宿主机不走配置也能跑。
+     */
+    @Value("${scenic.upload.dir:D:/scenic_uploads}")
     private String uploadDir;
 
     @Override
+    @Transactional   // 2026-11-03：整个导入一个事务（见 batchInsert 的说明）
     public Map<String, Object> importXlsx(String filePath) throws Exception {
         // 查找文件：优先指定路径，然后项目根目录，最后上传目录
         File file = null;
@@ -121,6 +135,20 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         }
     }
 
+    /**
+     * 分批写入。
+     *
+     * <p>2026-11-03 记录：这个方法名叫 batchInsert，但内部是**逐条** {@code insert}，
+     * 而且每一条都在自己的事务里 —— MySQL 默认 {@code innodb_flush_log_at_trx_commit=1}，
+     * 每次 commit 都要 fsync。实测导入 14 万行只有 **87 行/秒**，全量要 25 分钟。
+     *
+     * <p>当前缓解办法：在 {@link #importXlsx} 上加了 {@code @Transactional}，
+     * 让这 500 条一批的 insert 合并成一次提交，commit 次数从 14 万降到 1 次。
+     *
+     * <p>彻底的做法是用真正的 JDBC 批量（{@code JdbcTemplate.batchUpdate} +
+     * 连接串 {@code rewriteBatchedStatements=true}），但那要手写 INSERT 语句、
+     * 或者给 Mapper 加 XML，改动面大。当前数据量下 {@code @Transactional} 已经够用。
+     */
     private void batchInsert(List<TourismData> batch) {
         for (TourismData data : batch) {
             tourismDataMapper.insert(data);

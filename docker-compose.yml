@@ -29,6 +29,19 @@
 #   卷是 compose 自己管理的命名卷（见文件末尾 volumes 段），首次 up 会自动创建。
 #   2026-10-07 记录：原来的 pgvector_data 卷曾被 docker prune 删除、71 条向量丢失过一次；
 #   重建后已通过重新处理知识库文档恢复，因此这里不再声明 external。
+#
+# ─────────────────── 为什么每个服务都写 restart: "no" ───────────────────
+# 2026-11-03：本机同时开着十几个别的项目的容器（lucky-*、zhidang-*、webgis-* 等），
+# 它们大多是 restart: unless-stopped —— 一打开 Docker Desktop 就全部被拉起来，
+# 内存被吃掉几个 G，而这个项目反而没在用。
+#
+# 所以这里**显式**写死 restart: "no"：
+#   - 防止以后有人顺手加 restart: always / unless-stopped（那会让 Docker 开机就拉起四个容器）
+#   - 明确语义：本项目只在**你手动 `docker compose up -d`** 时才启动
+#
+# 代价要说清楚：容器自己崩溃（OOM / 进程异常退出）后**不会**自动重启，
+# 需要手动 `docker compose up -d`。本地开发这个取舍是划算的；
+# 如果哪天要部署到服务器长跑，那时候再改成 `unless-stopped`。
 
 services:
   mysql:
@@ -37,6 +50,7 @@ services:
     # 容器内部仍是标准 3306，应用容器通过服务名 mysql 连接，不受映射影响。
     image: mysql:8.0
     container_name: scenic-mysql
+    restart: "no"          # 见文件头：只在手动 up 时启动
     environment:
       MYSQL_ROOT_PASSWORD: ${SCENIC_MYSQL_PASSWORD:-123456}
       MYSQL_DATABASE: scenic_ai
@@ -60,6 +74,7 @@ services:
     # 知识库向量（scenic_embeddings）、长期记忆（visitor_memory）、语义缓存（semantic_cache）三张表都在这里
     image: pgvector/pgvector:pg17
     container_name: pgvector
+    restart: "no"          # 见文件头：只在手动 up 时启动
     environment:
       POSTGRES_DB: scenic_vectors
       POSTGRES_USER: postgres
@@ -80,6 +95,7 @@ services:
     # 三层记忆（滑窗/摘要）、语义缓存计数、限流、幂等都依赖它
     image: redis:7-alpine
     container_name: scenic-redis
+    restart: "no"          # 见文件头：只在手动 up 时启动
     # 默认不带密码（本机开发够用）。要加密码见文件末尾说明。
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -102,6 +118,7 @@ services:
       # 要自包含构建（换机器/CI）就把这里换成 Dockerfile（多阶段版本）。
       dockerfile: Dockerfile.runtime
     container_name: scenic-app
+    restart: "no"          # 见文件头：只在手动 up 时启动
     depends_on:
       mysql:
         condition: service_healthy
