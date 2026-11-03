@@ -278,16 +278,16 @@ onMounted(() => {
 <style scoped>
 .rag-view { padding: 20px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.page-header h2 { margin: 0; font-size: 20px; color: #303133; }
+.page-header h2 { margin: 0; font-size: 20px; color: var(--color-ink); }
 .card-head { display: flex; align-items: center; justify-content: space-between; }
-.card-title { font-weight: 600; color: #303133; }
-.mini-stat { background: #f8f9fb; border-radius: 8px; padding: 14px 16px; text-align: center; }
+.card-title { font-weight: 600; color: var(--color-ink); }
+.mini-stat { background: var(--color-bg-tint); border-radius: 8px; padding: 14px 16px; text-align: center; }
 .mini-stat.ok { background: #f0f9eb; }
 .mini-stat.bad { background: #fef0f0; }
-.mini-label { font-size: 12px; color: #909399; margin-bottom: 6px; }
-.mini-value { font-size: 22px; font-weight: 600; color: #303133; }
+.mini-label { font-size: 12px; color: var(--color-muted); margin-bottom: 6px; }
+.mini-value { font-size: 22px; font-weight: 600; color: var(--color-ink); }
 .probe-bar { display: flex; gap: 10px; }
 .adv-controls { display: flex; align-items: center; gap: 8px; }
-.adv-label { font-size: 12px; color: #909399; }
-.raw-json { background: #f8f9fb; border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; max-height: 300px; overflow: auto; margin: 12px 0 0; }
+.adv-label { font-size: 12px; color: var(--color-muted); }
+.raw-json { background: var(--color-bg-tint); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; max-height: 300px; overflow: auto; margin: 12px 0 0; }
 </style>

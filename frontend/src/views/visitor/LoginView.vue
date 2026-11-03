@@ -169,9 +169,10 @@ function toggleMode() {
 @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&display=swap');
 
 .login-page {
-  --green: #5a8a6a;
-  --green-dark: #3d6b4e;
-  --ink: #2c3e2f;
+  /* 2026-11-03：接到 tokens 的品牌色上，不再自己维护一套绿 */
+  --green: var(--color-brand);
+  --green-dark: var(--color-brand-hover);
+  --ink: var(--color-ink);
 
   height: 100vh;
   display: flex;
@@ -183,7 +184,7 @@ function toggleMode() {
 .visual-panel {
   flex: 1;
   position: relative;
-  background: linear-gradient(160deg, #e8f0eb 0%, #c9d8cc 40%, #a8c0ad 100%);
+  background: linear-gradient(160deg, var(--color-brand-soft) 0%, var(--color-brand-soft) 40%, var(--color-muted) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -256,7 +257,7 @@ function toggleMode() {
   position: relative;
   z-index: 2;
   text-align: center;
-  color: #fff;
+  color: var(--color-surface);
   padding: 40px;
 }
 
@@ -327,7 +328,7 @@ function toggleMode() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #fafcfb;
+  background: var(--color-surface);
   position: relative;
 }
 
@@ -346,16 +347,17 @@ function toggleMode() {
 }
 
 .form-title {
-  font-size: 26px;
-  font-weight: 700;
+  font-family: var(--font-display);   /* 与首页、后台统一：标题用宋体 */
+  font-size: 28px;
+  font-weight: 600;
   color: var(--ink);
   margin: 0;
-  letter-spacing: 2px;
+  letter-spacing: 0.06em;
 }
 
 .form-subtitle {
-  font-size: 13px;
-  color: rgba(44,62,47,0.4);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
   margin: 8px 0 0;
 }
 
@@ -378,7 +380,7 @@ function toggleMode() {
   padding: 10px 0;
   font-size: 13px;
   font-weight: 600;
-  color: rgba(44,62,47,0.4);
+  color: var(--color-muted);
   cursor: pointer;
   transition: color 0.3s;
   font-family: inherit;
@@ -393,7 +395,7 @@ function toggleMode() {
   left: 3px;
   width: calc(50% - 3px);
   height: calc(100% - 6px);
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
@@ -441,7 +443,7 @@ function toggleMode() {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: #fff;
+  background: var(--color-surface);
   border: 1.5px solid rgba(90,138,106,0.12);
   border-radius: 10px;
   padding: 0 14px;
@@ -483,8 +485,8 @@ function toggleMode() {
   padding: 14px;
   border: none;
   border-radius: 10px;
-  background: linear-gradient(135deg, #5a8a6a, #4a7a5a);
-  color: #fff;
+  background: linear-gradient(135deg, var(--color-brand), var(--color-brand));
+  color: var(--color-surface);
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 3px;
@@ -515,7 +517,7 @@ function toggleMode() {
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: #fff;
+  border-top-color: var(--color-surface);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -543,7 +545,7 @@ function toggleMode() {
   .login-page {
     align-items: center;
     justify-content: center;
-    background: linear-gradient(160deg, #e8f0eb, #c9d8cc, #a8c0ad);
+    background: linear-gradient(160deg, var(--color-brand-soft), var(--color-brand-soft), var(--color-muted));
   }
 
   .visual-panel {

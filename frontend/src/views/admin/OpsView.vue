@@ -231,15 +231,15 @@ onMounted(load)
 <style scoped>
 .ops-view { padding: 20px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.page-header h2 { margin: 0; font-size: 20px; color: #303133; }
-.stat-card { background: #fff; border-radius: 10px; padding: 18px 20px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); border-left: 4px solid #dcdfe6; }
+.page-header h2 { margin: 0; font-size: 20px; color: var(--color-ink); }
+.stat-card { background: var(--color-surface); border-radius: 10px; padding: 18px 20px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); border-left: 4px solid #dcdfe6; }
 .stat-card.primary { border-left-color: #409eff; }
 .stat-card.success { border-left-color: #67c23a; }
-.stat-label { font-size: 13px; color: #909399; margin-bottom: 8px; }
-.stat-value { font-size: 24px; font-weight: 600; color: #303133; line-height: 1.2; }
+.stat-label { font-size: 13px; color: var(--color-muted); margin-bottom: 8px; }
+.stat-value { font-size: 24px; font-weight: 600; color: var(--color-ink); line-height: 1.2; }
 .stat-sub { font-size: 12px; color: #c0c4cc; margin-top: 6px; }
-.card-title { font-weight: 600; color: #303133; }
-.explain { margin-top: 10px; font-size: 12px; color: #909399; line-height: 1.6; }
+.card-title { font-weight: 600; color: var(--color-ink); }
+.explain { margin-top: 10px; font-size: 12px; color: var(--color-muted); line-height: 1.6; }
 .slow { color: #e6a23c; font-weight: 600; }
 .group-block { margin-top: 14px; }
 .group-title { font-size: 13px; font-weight: 600; color: #606266; margin-bottom: 8px; }

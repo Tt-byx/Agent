@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * ECharts 画在 Canvas 上，**不认 CSS 变量**。
+ * 直接写 'var(--color-brand)' 会得到无效色值，退化成黑色（本次改版踩过这个坑）。
+ * 所以这里把变量读成真实色值再交给图表。
+ */
+function cssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { getMarketingReport } from '@/api/analytics'
@@ -19,9 +29,9 @@ let dwellChart = null
 let seasonalChart = null
 
 const palette = {
-  sage: '#5a8a6a', sageLight: '#7ba88a', warm: '#c4956a',
-  teal: '#6a858a', rose: '#c0705a', lavender: '#8b7bb5',
-  gold: '#bfa76a', coral: '#d4827a', sky: '#6a9fb5',
+  sage: cssVar('--color-brand'), sageLight: cssVar('--color-brand'), warm: cssVar('--color-accent'),
+  teal: cssVar('--color-ink-soft'), rose: cssVar('--color-danger'), lavender: '#8b7bb5',
+  gold: '#bfa76a', coral: cssVar('--color-danger'), sky: '#6a9fb5',
 }
 
 async function fetchReport() {
@@ -63,7 +73,7 @@ function renderHorizontalBar(id, data, nameKey, valueKey, seriesName, color) {
   chart.setOption({
     tooltip: { trigger: 'axis', backgroundColor: 'rgba(45,52,64,0.92)', borderColor: 'transparent', textStyle: { color: '#fff', fontSize: 12 } },
     grid: { top: 8, right: 60, bottom: 12, left: 90 },
-    xAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0efec', type: 'dashed' } }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
+    xAxis: { type: 'value', splitLine: { lineStyle: { color: cssVar('--color-bg-tint'), type: 'dashed' } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
     yAxis: {
       type: 'category',
       data: sorted.map(d => {
@@ -71,7 +81,7 @@ function renderHorizontalBar(id, data, nameKey, valueKey, seriesName, color) {
         return name.length > 8 ? name.slice(0, 8) + '…' : name
       }),
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: '#5a6577', fontSize: 12 },
+      axisLabel: { color: cssVar('--color-ink-soft'), fontSize: 12 },
     },
     series: [{
       type: 'bar', barWidth: '55%', barMaxWidth: 20,
@@ -85,7 +95,7 @@ function renderHorizontalBar(id, data, nameKey, valueKey, seriesName, color) {
           borderRadius: [0, 4, 4, 0],
         },
       })),
-      label: { show: true, position: 'right', fontSize: 11, color: '#8d95a3' },
+      label: { show: true, position: 'right', fontSize: 11, color: cssVar('--color-muted') },
     }],
   })
   if (id === 'top-spenders-chart') topSpendersChart = chart
@@ -102,10 +112,10 @@ function renderAgeConsumption(data) {
 
   ageConsumptionChart.setOption({
     tooltip: { trigger: 'axis', backgroundColor: 'rgba(45,52,64,0.92)', borderColor: 'transparent', textStyle: { color: '#fff', fontSize: 12 } },
-    legend: { data: categories, bottom: 0, itemGap: 12, textStyle: { fontSize: 11, color: '#8d95a3' }, itemWidth: 10, itemHeight: 8 },
+    legend: { data: categories, bottom: 0, itemGap: 12, textStyle: { fontSize: 11, color: cssVar('--color-muted') }, itemWidth: 10, itemHeight: 8 },
     grid: { top: 12, right: 16, bottom: 48, left: 56 },
-    xAxis: { type: 'category', data: data.map(d => d.age_group), axisLine: { lineStyle: { color: '#eae8e4' } }, axisLabel: { color: '#8d95a3', fontSize: 11 }, axisTick: { show: false } },
-    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: '#f0efec', type: 'dashed' } }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
+    xAxis: { type: 'category', data: data.map(d => d.age_group), axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 }, axisTick: { show: false } },
+    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: cssVar('--color-bg-tint'), type: 'dashed' } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
     series: categories.map((name, i) => ({
       name, type: 'bar',
       data: data.map(d => Number(d[keys[i]])?.toFixed(0) || 0),
@@ -125,10 +135,10 @@ function renderGenderConsumption(data) {
 
   genderConsumptionChart.setOption({
     tooltip: { trigger: 'axis', backgroundColor: 'rgba(45,52,64,0.92)', borderColor: 'transparent', textStyle: { color: '#fff' } },
-    legend: { data: data.map(d => d.gender), bottom: 0, textStyle: { fontSize: 11, color: '#8d95a3' }, itemWidth: 10, itemHeight: 8 },
+    legend: { data: data.map(d => d.gender), bottom: 0, textStyle: { fontSize: 11, color: cssVar('--color-muted') }, itemWidth: 10, itemHeight: 8 },
     grid: { top: 12, right: 16, bottom: 48, left: 56 },
-    xAxis: { type: 'category', data: categories, axisLine: { lineStyle: { color: '#eae8e4' } }, axisLabel: { color: '#8d95a3', fontSize: 11 }, axisTick: { show: false } },
-    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: '#f0efec', type: 'dashed' } }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
+    xAxis: { type: 'category', data: categories, axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 }, axisTick: { show: false } },
+    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: cssVar('--color-bg-tint'), type: 'dashed' } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
     series: data.map((d, idx) => ({
       name: d.gender,
       type: 'bar',
@@ -147,8 +157,8 @@ function renderDwellChart(data) {
   dwellChart.setOption({
     tooltip: { trigger: 'axis', backgroundColor: 'rgba(45,52,64,0.92)', borderColor: 'transparent', textStyle: { color: '#fff' } },
     grid: { top: 12, right: 16, bottom: 32, left: 56 },
-    xAxis: { type: 'category', data: data.map(d => d.stay_group), axisLine: { lineStyle: { color: '#eae8e4' } }, axisLabel: { color: '#8d95a3', fontSize: 11 }, axisTick: { show: false } },
-    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: '#f0efec', type: 'dashed' } }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
+    xAxis: { type: 'category', data: data.map(d => d.stay_group), axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 }, axisTick: { show: false } },
+    yAxis: { type: 'value', name: '元', splitLine: { lineStyle: { color: cssVar('--color-bg-tint'), type: 'dashed' } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
     series: [{
       type: 'bar', barWidth: '50%',
       data: data.map((d, i) => ({
@@ -181,12 +191,12 @@ function renderSeasonalChart(data) {
           <div>满意度: ${Number(d.avg_satisfaction).toFixed(1)}</div>`
       },
     },
-    legend: { data: ['访客量', '总收入'], bottom: 0, itemGap: 16, textStyle: { fontSize: 12, color: '#8d95a3' }, itemWidth: 12, itemHeight: 8 },
+    legend: { data: ['访客量', '总收入'], bottom: 0, itemGap: 16, textStyle: { fontSize: 12, color: cssVar('--color-muted') }, itemWidth: 12, itemHeight: 8 },
     grid: { top: 16, right: 60, bottom: 48, left: 56 },
-    xAxis: { type: 'category', data: data.map(d => d.month), axisLine: { lineStyle: { color: '#eae8e4' } }, axisLabel: { color: '#8d95a3', fontSize: 11 }, axisTick: { show: false } },
+    xAxis: { type: 'category', data: data.map(d => d.month), axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 }, axisTick: { show: false } },
     yAxis: [
-      { type: 'value', name: '人数', splitLine: { lineStyle: { color: '#f0efec', type: 'dashed' } }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
-      { type: 'value', name: '收入(¥)', splitLine: { show: false }, axisLabel: { color: '#8d95a3', fontSize: 11 } },
+      { type: 'value', name: '人数', splitLine: { lineStyle: { color: cssVar('--color-bg-tint'), type: 'dashed' } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
+      { type: 'value', name: '收入(¥)', splitLine: { show: false }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
     ],
     series: [
       {
@@ -358,31 +368,31 @@ onUnmounted(() => {
 }
 
 .page-title {
-  font-size: 20px; font-weight: 700; color: #2d3440; margin: 0;
+  font-size: 20px; font-weight: 700; color: var(--color-ink); margin: 0;
 }
-.page-desc { font-size: 13px; color: #8d95a3; margin: 4px 0 0; }
+.page-desc { font-size: 13px; color: var(--color-muted); margin: 4px 0 0; }
 
 .refresh-btn {
-  background: #5a8a6a; border-color: #5a8a6a; border-radius: 8px; flex-shrink: 0;
+  background: var(--color-brand); border-color: var(--color-brand); border-radius: 8px; flex-shrink: 0;
 }
 
 .section-title {
   display: flex; align-items: center; gap: 8px;
-  font-size: 15px; font-weight: 600; color: #2d3440;
+  font-size: 15px; font-weight: 600; color: var(--color-ink);
   margin-top: 8px; margin-bottom: 4px;
 }
 
 .panel {
-  background: #fff; border-radius: 10px; border: 1px solid #eae8e4; padding: 20px;
+  background: var(--color-surface); border-radius: 10px; border: 1px solid var(--color-line); padding: 20px;
   transition: box-shadow 0.2s;
 }
 .panel:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.04); }
 
 .panel-head {
   display: flex; align-items: baseline; gap: 10px;
-  margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eae8e4;
+  margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--color-line);
 }
-.panel-label { font-size: 14px; font-weight: 600; color: #2d3440; }
+.panel-label { font-size: 14px; font-weight: 600; color: var(--color-ink); }
 
 .chart-area { width: 100%; height: 300px; }
 .chart-area--tall { height: 360px; }
@@ -392,16 +402,16 @@ onUnmounted(() => {
 }
 
 /* AI */
-.ai-btn { border-color: #c4956a; color: #c4956a; }
+.ai-btn { border-color: var(--color-accent); color: var(--color-accent); }
 .ai-content {
-  font-size: 14px; line-height: 1.8; color: #2d3440; white-space: pre-wrap;
-  padding: 12px 16px; background: #fdf8f0; border-radius: 8px; border-left: 3px solid #c4956a;
+  font-size: 14px; line-height: 1.8; color: var(--color-ink); white-space: pre-wrap;
+  padding: 12px 16px; background: var(--color-accent-soft); border-radius: 8px; border-left: 3px solid var(--color-accent);
 }
-.ai-empty { font-size: 13px; color: #8d95a3; text-align: center; padding: 24px 0; }
+.ai-empty { font-size: 13px; color: var(--color-muted); text-align: center; padding: 24px 0; }
 
 .empty-state {
-  text-align: center; padding: 60px 20px; color: #8d95a3; font-size: 14px;
-  background: #fff; border-radius: 10px; border: 1px solid #eae8e4;
+  text-align: center; padding: 60px 20px; color: var(--color-muted); font-size: 14px;
+  background: var(--color-surface); border-radius: 10px; border: 1px solid var(--color-line);
 }
 
 @media (max-width: 900px) {

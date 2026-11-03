@@ -1,0 +1,134 @@
+/**
+ * 设计令牌（Design Tokens）
+ * ────────────────────────────────────────────────────────────
+ * 2026-11-03 建立。此前项目没有令牌层，颜色散落在各组件的 scoped style 里，
+ * 结果就是「主题是绿 #5A8A6A、按钮却是 Element Plus 默认蓝 #409EFF」这种
+ * 两套色系打架的局面。
+ *
+ * 视觉方向：极致极简 + 空气感（参考 deepseek.com 的克制，但主色换成景区墨绿）
+ * 记忆点：首页那颗大圆角输入框 —— 用户第一眼就能直接提问，而不是先找按钮。
+ *
+ * 使用规则：
+ *   1. 组件里**禁止**写死色值，一律引用这里的变量。
+ *   2. 需要新色时先在这里加语义别名，不要在组件里临时造。
+ *   3. Element Plus 的主题色在文件末尾统一覆盖。
+ */
+
+:root {
+  /* ── 色彩：主导 60% / 辅助 30% / 强调 10% ── */
+  --color-bg:            #FBFAF9;  /* 暖白，不用纯白 —— 纯白配纯黑是最廉价的一组 */
+  --color-bg-tint:       #F3F6F4;  /* 次级背景，比 bg 略冷 */
+  --color-surface:       #FFFFFF;  /* 卡片/输入框表面 */
+  --color-ink:           #16261F;  /* 主文字：带绿调的近黑，代替 #000 */
+  --color-ink-soft:      #3D4F47;  /* 次级文字 */
+  --color-muted:         #8A9691;  /* 弱化文字、占位符 */
+  --color-line:          rgba(22, 38, 31, 0.08);   /* 发丝边框 */
+  --color-line-strong:   rgba(22, 38, 31, 0.14);
+
+  /* 品牌：墨绿。比原来的 #5A8A6A 深两档 —— 浅绿显廉价，深绿才有分量 */
+  --color-brand:         #1F5C43;
+  --color-brand-hover:   #174935;
+  --color-brand-soft:    #E8F0EC;  /* 极浅品牌色底，用于选中态/标签 */
+  --color-brand-glow:    rgba(31, 92, 67, 0.10);  /* 光晕用 */
+
+  /* 强调：暖金。单页只出现一次，留给最关键的那个动作 */
+  --color-accent:        #B8860B;
+  --color-accent-soft:   rgba(184, 134, 11, 0.10);
+
+  /* 语义色（全局统一，避免各处自己调） */
+  --color-success:       #2E7D5B;
+  --color-warning:       #B8860B;
+  --color-danger:        #B3392E;
+  --color-danger-soft:   rgba(179, 57, 46, 0.08);
+
+  /* ── 字体 ──
+     展示字用宋体：区别于满大街的黑体 AI 味，也更贴合「山水/禅意」。
+     2026-11-03：**不走网络字体**。实测本机已装 NotoSerifSC-VF.ttf（思源宋体），
+     而 googleapis / fonts.loli.net 在国内不通、jsdelivr 首包 10 秒 ——
+     引一个拉不动的远程字体，代价是首屏白等。直接用系统已装的思源宋体最快。
+     换到没装的机器会自动退到 Songti/SimSun，仍是宋体，不会掉成黑体。     */
+  --font-display: "Noto Serif SC", "Noto Serif CJK SC", "Source Han Serif SC",
+                  "Songti SC", "STSong", "SimSun", serif;
+  --font-body:    "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono:    "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  /* 字阶：1.25 模块化比例 */
+  --text-xs:   12px;
+  --text-sm:   13px;
+  --text-base: 15px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  28px;
+  --text-3xl:  36px;
+  --text-4xl:  48px;
+  --text-5xl:  64px;
+
+  /* ── 间距：4 的倍数梯度 ── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  24px;
+  --space-6:  32px;
+  --space-7:  48px;
+  --space-8:  64px;
+  --space-9:  96px;
+
+  /* ── 圆角 ──
+     大圆角是「柔和」的核心信号，但只给容器；按钮用胶囊或小圆角保持利落 */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  16px;
+  --radius-xl:  24px;
+  --radius-full: 999px;
+
+  /* ── 阴影：三级高度，带绿调而非纯黑 ── */
+  --shadow-1: 0 1px 2px rgba(22, 38, 31, 0.04);
+  --shadow-2: 0 8px 24px rgba(22, 38, 31, 0.07);
+  --shadow-3: 0 24px 64px rgba(22, 38, 31, 0.10);
+
+  /* ── 动效 ── */
+  --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:  160ms;
+  --dur-base:  320ms;
+  --dur-slow:  640ms;
+}
+
+/* ───────────────────────── Element Plus 主题覆盖 ─────────────────────────
+ * Element Plus 的默认主色是 #409EFF（蓝），和项目主题完全不搭。
+ * 通过覆盖它的 CSS 变量统一成墨绿 —— 组件代码一行都不用改。
+ * light-3/5/7/8/9 是它内部做 hover/disabled/border 用的派生色，必须一起给，
+ * 否则会出现「主色是绿、hover 是蓝」的割裂。
+ */
+:root {
+  --el-color-primary: #1F5C43;
+  --el-color-primary-light-3: #4A7F68;
+  --el-color-primary-light-5: #7BA391;
+  --el-color-primary-light-7: #AEC5BA;
+  --el-color-primary-light-8: #C9D9D1;
+  --el-color-primary-light-9: #E8F0EC;
+  --el-color-primary-dark-2: #174935;
+
+  --el-text-color-primary: #16261F;
+  --el-text-color-regular: #3D4F47;
+  --el-text-color-secondary: #8A9691;
+  --el-text-color-placeholder: #A8B3AE;
+  --el-border-color: rgba(22, 38, 31, 0.10);
+  --el-border-color-light: rgba(22, 38, 31, 0.07);
+  --el-border-color-lighter: rgba(22, 38, 31, 0.05);
+  --el-fill-color-blank: #FFFFFF;
+  --el-bg-color: #FFFFFF;
+  --el-bg-color-page: #FBFAF9;
+  --el-font-family: var(--font-body);
+  --el-border-radius-base: 8px;
+}
+
+/* 减少动效偏好的用户：全部关掉，不要只是减速 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

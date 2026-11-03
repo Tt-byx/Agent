@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * ECharts 画在 Canvas 上，**不认 CSS 变量**。
+ * 直接写 'var(--color-brand)' 会得到无效色值，退化成黑色（本次改版踩过这个坑）。
+ * 所以这里把变量读成真实色值再交给图表。
+ */
+function cssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 import { ref, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { getOverview, getSentiment, getTrends, getConversations, getTopQuestions } from '@/api/dashboard'
@@ -15,7 +25,7 @@ let sentimentChart = null
 let trendChart = null
 let questionsChart = null
 
-const sentimentColors = { positive: '#5a8a6a', neutral: '#a0aec0', negative: '#c0705a' }
+const sentimentColors = { positive: cssVar('--color-brand'), neutral: '#a0aec0', negative: cssVar('--color-danger') }
 const sentimentLabels = { positive: '正面', neutral: '中性', negative: '负面' }
 
 const statCards = [
@@ -50,7 +60,7 @@ function renderCharts() {
     if (!sentimentChart) sentimentChart = echarts.init(sentEl)
     sentimentChart.setOption({
       tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-      legend: { bottom: 0, itemGap: 20, textStyle: { fontSize: 12, color: '#718096' } },
+      legend: { bottom: 0, itemGap: 20, textStyle: { fontSize: 12, color: cssVar('--color-muted') } },
       series: [{
         type: 'pie', radius: ['45%', '72%'],
         center: ['50%', '45%'],
@@ -73,13 +83,13 @@ function renderCharts() {
     const msgCounts = trendData.value.messages?.map(d => d.count) || []
     trendChart.setOption({
       tooltip: { trigger: 'axis' },
-      legend: { data: ['会话数', '消息数'], bottom: 0, itemGap: 20, textStyle: { fontSize: 12, color: '#718096' } },
+      legend: { data: ['会话数', '消息数'], bottom: 0, itemGap: 20, textStyle: { fontSize: 12, color: cssVar('--color-muted') } },
       grid: { top: 20, right: 20, bottom: 40, left: 50 },
-      xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#e2e8f0' } }, axisLabel: { color: '#718096', fontSize: 11 } },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f0f0' } }, axisLabel: { color: '#718096', fontSize: 11 } },
+      xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
       series: [
-        { name: '会话数', type: 'line', smooth: true, data: sessionCounts, symbol: 'circle', symbolSize: 6, itemStyle: { color: '#5a8a6a' }, lineStyle: { width: 2.5 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(90,138,106,0.15)' }, { offset: 1, color: 'rgba(90,138,106,0.02)' }]) } },
-        { name: '消息数', type: 'line', smooth: true, data: msgCounts, symbol: 'circle', symbolSize: 6, itemStyle: { color: '#c4956a' }, lineStyle: { width: 2.5 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(196,149,106,0.12)' }, { offset: 1, color: 'rgba(196,149,106,0.02)' }]) } },
+        { name: '会话数', type: 'line', smooth: true, data: sessionCounts, symbol: 'circle', symbolSize: 6, itemStyle: { color: cssVar('--color-brand') }, lineStyle: { width: 2.5 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(90,138,106,0.15)' }, { offset: 1, color: 'rgba(90,138,106,0.02)' }]) } },
+        { name: '消息数', type: 'line', smooth: true, data: msgCounts, symbol: 'circle', symbolSize: 6, itemStyle: { color: cssVar('--color-accent') }, lineStyle: { width: 2.5 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(196,149,106,0.12)' }, { offset: 1, color: 'rgba(196,149,106,0.02)' }]) } },
       ],
     })
   }
@@ -100,13 +110,13 @@ function renderCharts() {
         },
       },
       grid: { top: 16, right: 20, bottom: 40, left: 50 },
-      xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#e2e8f0' } }, axisLabel: { color: '#718096', fontSize: 11 } },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f0f0' } }, axisLabel: { color: '#718096', fontSize: 11 } },
+      xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: cssVar('--color-line') } }, axisLabel: { color: cssVar('--color-muted'), fontSize: 11 } },
       series: [{
         type: 'bar', data: values, barWidth: '50%', barMaxWidth: 36,
         itemStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: '#7ba88a' }, { offset: 1, color: '#5a8a6a' },
+            { offset: 0, color: cssVar('--color-brand') }, { offset: 1, color: cssVar('--color-brand') },
           ]),
           borderRadius: [4, 4, 0, 0],
         },
@@ -253,10 +263,10 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.stat-card--sage .stat-icon-wrap { background: #e8f0eb; color: #5a8a6a; }
-.stat-card--warm .stat-icon-wrap { background: #f5ede4; color: #c4956a; }
-.stat-card--stone .stat-icon-wrap { background: #eae8e4; color: #8a8578; }
-.stat-card--earth .stat-icon-wrap { background: #e4eae8; color: #6a858a; }
+.stat-card--sage .stat-icon-wrap { background: var(--color-brand-soft); color: var(--color-brand); }
+.stat-card--warm .stat-icon-wrap { background: var(--color-accent-soft); color: var(--color-accent); }
+.stat-card--stone .stat-icon-wrap { background: var(--color-line); color: var(--color-muted); }
+.stat-card--earth .stat-icon-wrap { background: #e4eae8; color: var(--color-ink-soft); }
 
 .stat-body {
   display: flex;
@@ -296,7 +306,7 @@ onUnmounted(() => {
 .fb-icon { font-size: 28px; margin-bottom: 6px; }
 .fb-count { font-size: 24px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .fb-label { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
-.fb-satisfaction { border-color: #5a8a6a; background: #e8f0eb; }
+.fb-satisfaction { border-color: var(--color-brand); background: var(--color-brand-soft); }
 
 /* ── Panels ── */
 .panel {

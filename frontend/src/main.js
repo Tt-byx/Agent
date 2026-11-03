@@ -10,6 +10,8 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
+// 顺序要紧：tokens 必须在 element-plus 的样式之后引入，才能覆盖它的主题变量
+import './assets/styles/tokens.css'
 import './assets/styles/global.css'
 
 const app = createApp(App)

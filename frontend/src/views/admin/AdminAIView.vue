@@ -191,7 +191,7 @@ function scrollToBottom() {
             :value="v.userId"
           >
             <span>{{ v.nickname }}</span>
-            <span v-if="v.topTags?.length" style="float:right;color:#8d95a3;font-size:11px">
+            <span v-if="v.topTags?.length" style="float:right;color:var(--color-muted);font-size:11px">
               {{ v.topTags.slice(0, 2).join('、') }}
             </span>
           </el-option>
@@ -228,7 +228,7 @@ function scrollToBottom() {
   flex-direction: column;
   background: var(--bg-card, #fff);
   border-radius: 10px;
-  border: 1px solid var(--border-light, #eae8e4);
+  border: 1px solid var(--border-light, var(--color-line));
   overflow: hidden;
 }
 
@@ -263,8 +263,8 @@ function scrollToBottom() {
 }
 
 .msg-row.assistant .msg-avatar {
-  background: #e8f0eb;
-  color: #5a8a6a;
+  background: var(--color-brand-soft);
+  color: var(--color-brand);
 }
 
 .msg-row.user .msg-avatar {
@@ -281,12 +281,12 @@ function scrollToBottom() {
 
 .msg-row.assistant .msg-bubble {
   background: #f5f5f3;
-  color: #2d3440;
+  color: var(--color-ink);
 }
 
 .msg-row.user .msg-bubble {
-  background: #5a8a6a;
-  color: #fff;
+  background: var(--color-brand);
+  color: var(--color-surface);
 }
 
 .msg-content {
@@ -295,12 +295,12 @@ function scrollToBottom() {
 }
 
 .msg-content.typing {
-  color: #8d95a3;
+  color: var(--color-muted);
 }
 
 .chat-input-area {
   padding: 16px;
-  border-top: 1px solid var(--border-light, #eae8e4);
+  border-top: 1px solid var(--border-light, var(--color-line));
   display: flex;
   gap: 10px;
   align-items: flex-end;
@@ -311,8 +311,8 @@ function scrollToBottom() {
 }
 
 .send-btn {
-  background: #5a8a6a;
-  border-color: #5a8a6a;
+  background: var(--color-brand);
+  border-color: var(--color-brand);
   border-radius: 8px;
   height: 42px;
   padding: 0 20px;
@@ -331,7 +331,7 @@ function scrollToBottom() {
 .panel-card {
   background: var(--bg-card, #fff);
   border-radius: 10px;
-  border: 1px solid var(--border-light, #eae8e4);
+  border: 1px solid var(--border-light, var(--color-line));
   padding: 16px;
 }
 
@@ -341,10 +341,10 @@ function scrollToBottom() {
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary, #2d3440);
+  color: var(--text-primary, var(--color-ink));
   margin-bottom: 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-light, #eae8e4);
+  border-bottom: 1px solid var(--border-light, var(--color-line));
 }
 
 .quick-list {
@@ -355,7 +355,7 @@ function scrollToBottom() {
 
 .quick-item {
   font-size: 13px;
-  color: #5a8a6a;
+  color: var(--color-brand);
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -364,12 +364,12 @@ function scrollToBottom() {
 }
 
 .quick-item:hover {
-  background: #e8f0eb;
+  background: var(--color-brand-soft);
 }
 
 .recommend-btn {
-  background: #c4956a;
-  border-color: #c4956a;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .recommend-btn:hover {

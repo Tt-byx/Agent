@@ -38,12 +38,11 @@ function formatTime(timestamp) {
 
 <template>
   <div class="chat-message" :class="[message.role, { error: message.isError }]">
-    <div class="avatar">
-      <el-avatar v-if="message.role === 'user'" :size="36" style="background: #409eff">
+    <!-- 2026-11-03：只给用户留头像。AI 的回答改为无头像、无气泡的纯文本，
+         这是 chat.deepseek.com 的做法 —— 回答本身是主体，不该被气泡框住。 -->
+    <div v-if="message.role === 'user'" class="avatar">
+      <el-avatar :size="30" class="user-avatar">
         <el-icon><User /></el-icon>
-      </el-avatar>
-      <el-avatar v-else :size="36" style="background: #67c23a">
-        <el-icon><ChatDotRound /></el-icon>
       </el-avatar>
     </div>
     <div class="content-wrapper">
@@ -80,8 +79,13 @@ function formatTime(timestamp) {
 .chat-message {
   display: flex;
   gap: 10px;
-  margin-bottom: 16px;
-  max-width: 80%;
+  margin-bottom: 22px;
+  max-width: 82%;
+}
+
+/* AI 回答占满内容宽度，读起来更顺（气泡框会把长文本挤窄） */
+.chat-message.assistant {
+  max-width: 100%;
 }
 
 .chat-message.user {
@@ -93,10 +97,15 @@ function formatTime(timestamp) {
   margin-right: auto;
 }
 
+.user-avatar {
+  background: var(--color-bg-tint);
+  color: var(--color-ink-soft);
+}
+
 .chat-message.error .bubble.assistant {
-  background: #fef0f0;
-  border-color: #fbc4c4;
-  color: #f56c6c;
+  background: var(--color-danger-soft);
+  border-color: var(--color-line-strong);
+  color: var(--color-danger);
 }
 
 .content-wrapper {
@@ -118,21 +127,26 @@ function formatTime(timestamp) {
 }
 
 .bubble.user {
-  background: #409eff;
-  color: #fff;
+  background: var(--color-bg-tint);
+  color: var(--color-ink);          /* 浅灰底必须配深字，白字会看不见 */
   border-top-right-radius: 4px;
 }
 
+/* AI：完全没有气泡 —— 去掉边框、底色、内边距和圆角，
+   让回答直接落在页面上，长文本读起来不会被框挤窄 */
 .bubble.assistant {
-  background: #fff;
-  color: #303133;
-  border: 1px solid #e4e7ed;
-  border-top-left-radius: 4px;
+  background: transparent;
+  color: var(--color-ink);
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: var(--text-base);
+  line-height: 1.8;
 }
 
 .time {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-muted);
   margin-top: 4px;
 }
 
@@ -145,14 +159,14 @@ function formatTime(timestamp) {
 
 .metric {
   font-size: 11px;
-  color: #c0c4cc;
+  color: var(--color-line-strong);
 }
 
 /* 流式输出的光标：闪烁提示"正在生成" */
 .cursor {
   display: inline-block;
   margin-left: 1px;
-  color: #409eff;
+  color: var(--color-brand);
   animation: blink 1s step-end infinite;
 }
 
@@ -169,7 +183,7 @@ function formatTime(timestamp) {
 
 .fb-btn {
   background: none;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--color-line);
   border-radius: 14px;
   padding: 2px 10px;
   cursor: pointer;
@@ -179,14 +193,14 @@ function formatTime(timestamp) {
 }
 
 .fb-btn:hover {
-  background: #f5f7fa;
-  border-color: #c0c4cc;
+  background: var(--color-bg-tint);
+  border-color: var(--color-line-strong);
   transform: scale(1.1);
 }
 
 .fb-btn.active {
-  background: #e8f0eb;
-  border-color: #5a8a6a;
+  background: var(--color-brand-soft);
+  border-color: var(--color-brand);
   transform: scale(1.15);
 }
 </style>

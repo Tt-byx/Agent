@@ -27,10 +27,10 @@ const menuItems = [
       <div class="brand" :class="{ collapsed: isCollapse }">
         <div class="brand-mark">
           <svg viewBox="0 0 32 32" fill="none" class="brand-icon">
-            <path d="M16 4 L6 26 L26 26 Z" fill="#5a8a6a" opacity="0.15"/>
-            <path d="M16 8 L9 24 L23 24 Z" stroke="#5a8a6a" stroke-width="1.5" fill="none"/>
-            <circle cx="16" cy="14" r="2.5" fill="#5a8a6a"/>
-            <path d="M12 20 Q16 17 20 20" stroke="#5a8a6a" stroke-width="1" fill="none"/>
+            <path d="M16 4 L6 26 L26 26 Z" fill="var(--color-brand)" opacity="0.15"/>
+            <path d="M16 8 L9 24 L23 24 Z" stroke="var(--color-brand)" stroke-width="1.5" fill="none"/>
+            <circle cx="16" cy="14" r="2.5" fill="var(--color-brand)"/>
+            <path d="M12 20 Q16 17 20 20" stroke="var(--color-brand)" stroke-width="1" fill="none"/>
           </svg>
         </div>
         <transition name="fade">
@@ -110,23 +110,33 @@ const menuItems = [
   height: 100vh;
   background: var(--bg-page);
 
-  /* ── Design tokens ── */
-  --bg-page: #f7f6f3;
-  --bg-card: #ffffff;
-  --bg-sidebar: #fafaf8;
-  --bg-hover: #f0efec;
-  --accent-sage: #5a8a6a;
-  --accent-sage-light: #e8f0eb;
-  --text-primary: #2d3440;
-  --text-secondary: #5a6577;
-  --text-tertiary: #8d95a3;
-  --border-light: #eae8e4;
-  --border-medium: #d5d2cc;
+  /* ── Design tokens ──
+   * 2026-11-03：原来这里写的是硬编码色值（var(--color-bg) / var(--color-brand) / var(--color-ink) …），
+   * 10 个管理页全都靠 var(--xxx) 消费它们。所以只改这一段，整套后台的配色
+   * 就统一到 tokens.css 的品牌体系上了 —— 组件代码一行都不用动。
+   *
+   * 语义映射的对应关系（保留原有变量名，避免动 10 个页面）：
+   *   accent-sage = 品牌主色，现在是墨绿 #1F5C43（原来是浅绿 var(--color-brand)）
+   *   text-primary / secondary / tertiary = 三级文字
+   *   border-light / medium = 两级发丝边框
+   */
+  --bg-page: var(--color-bg);
+  --bg-card: var(--color-surface);
+  --bg-sidebar: rgba(255, 255, 255, 0.72);
+  --bg-hover: var(--color-bg-tint);
+  --accent-sage: var(--color-brand);
+  --accent-sage-light: var(--color-brand-soft);
+  --text-primary: var(--color-ink);
+  --text-secondary: var(--color-ink-soft);
+  --text-tertiary: var(--color-muted);
+  --border-light: var(--color-line);
+  --border-medium: var(--color-line-strong);
 }
 
 /* ── Sidebar ── */
 .admin-aside {
   background: var(--bg-sidebar);
+  backdrop-filter: blur(14px);       /* 背景半透明，需要模糊才有「悬浮」感 */
   border-right: 1px solid var(--border-light);
   display: flex;
   flex-direction: column;
@@ -166,10 +176,11 @@ const menuItems = [
 }
 
 .brand-name {
-  font-size: 15px;
-  font-weight: 700;
+  font-family: var(--font-display);  /* 与游客端统一：标题用宋体 */
+  font-size: 16px;
+  font-weight: 600;
   color: var(--text-primary);
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
   line-height: 1.2;
 }
 

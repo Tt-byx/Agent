@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * ECharts 画在 Canvas 上，**不认 CSS 变量**。
+ * 直接写 'var(--color-brand)' 会得到无效色值，退化成黑色（本次改版踩过这个坑）。
+ * 所以这里把变量读成真实色值再交给图表。
+ */
+function cssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import * as echarts from 'echarts'
 import { getVisitorProfiles } from '@/api/analytics'
@@ -11,12 +21,12 @@ let radarChart = null
 let sentimentChart = null
 
 const palette = {
-  sage: '#5a8a6a',
-  sageLight: '#7ba88a',
-  warm: '#c4956a',
-  stone: '#8a8578',
-  teal: '#6a858a',
-  rose: '#c0705a',
+  sage: cssVar('--color-brand'),
+  sageLight: cssVar('--color-brand'),
+  warm: cssVar('--color-accent'),
+  stone: cssVar('--color-muted'),
+  teal: cssVar('--color-ink-soft'),
+  rose: cssVar('--color-danger'),
   lavender: '#8b7bb5',
 }
 
@@ -182,7 +192,7 @@ onUnmounted(() => {
               effect="dark"
               size="small"
               round
-              style="border: none; color: #fff;"
+              style="border: none; color: var(--color-surface);"
             >
               {{ tag.name }}
             </el-tag>
@@ -215,15 +225,15 @@ onUnmounted(() => {
                 <div :id="`sentiment-${visitor.userId}`" class="chart-container"></div>
                 <div class="sentiment-stats">
                   <div class="stat-item">
-                    <span class="stat-dot" style="background: #5a8a6a;"></span>
+                    <span class="stat-dot" style="background: var(--color-brand);"></span>
                     <span>积极 {{ visitor.sentiment?.positive || 0 }}</span>
                   </div>
                   <div class="stat-item">
-                    <span class="stat-dot" style="background: #8a8578;"></span>
+                    <span class="stat-dot" style="background: var(--color-muted);"></span>
                     <span>中性 {{ visitor.sentiment?.neutral || 0 }}</span>
                   </div>
                   <div class="stat-item">
-                    <span class="stat-dot" style="background: #c0705a;"></span>
+                    <span class="stat-dot" style="background: var(--color-danger);"></span>
                     <span>消极 {{ visitor.sentiment?.negative || 0 }}</span>
                   </div>
                 </div>
@@ -239,15 +249,15 @@ onUnmounted(() => {
 <style scoped>
 .visitor-profiles { max-width: 1200px; }
 .page-header { margin-bottom: 24px; }
-.page-title { font-size: 20px; font-weight: 700; color: #2d3440; margin: 0 0 6px; }
-.page-desc { font-size: 13px; color: #8d95a3; margin: 0; }
+.page-title { font-size: 20px; font-weight: 700; color: var(--color-ink); margin: 0 0 6px; }
+.page-desc { font-size: 13px; color: var(--color-muted); margin: 0; }
 .loading-state { text-align: center; color: #999; padding: 60px 0; }
 .empty-state { padding: 60px 0; }
 
 .visitors-list { display: flex; flex-direction: column; gap: 12px; }
 
 .visitor-card {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 12px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.06);
   overflow: hidden;
@@ -269,43 +279,43 @@ onUnmounted(() => {
 .visitor-info { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .visitor-avatar {
   width: 42px; height: 42px; border-radius: 50%;
-  background: linear-gradient(135deg, #e8f0eb, #d4e9d7);
-  color: #5a8a6a; font-weight: 700; font-size: 18px;
+  background: linear-gradient(135deg, var(--color-brand-soft), #d4e9d7);
+  color: var(--color-brand); font-weight: 700; font-size: 18px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
 .visitor-basic { min-width: 0; }
-.visitor-name { font-size: 15px; font-weight: 600; color: #2d3440; }
-.visitor-meta { font-size: 12px; color: #8d95a3; margin-top: 2px; }
+.visitor-name { font-size: 15px; font-weight: 600; color: var(--color-ink); }
+.visitor-meta { font-size: 12px; color: var(--color-muted); margin-top: 2px; }
 
 .visitor-tags-inline { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
 
 .expand-icon {
-  color: #8d95a3; transition: transform 0.25s; flex-shrink: 0;
+  color: var(--color-muted); transition: transform 0.25s; flex-shrink: 0;
 }
 .expand-icon.rotated { transform: rotate(180deg); }
 
 .visitor-detail {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-line);
   padding: 20px;
-  background: #fafaf8;
+  background: var(--color-bg);
 }
 
 .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .detail-section { }
-.section-title { font-size: 14px; font-weight: 600; color: #2d3440; margin: 0 0 12px; }
+.section-title { font-size: 14px; font-weight: 600; color: var(--color-ink); margin: 0 0 12px; }
 
 .chart-container { width: 100%; height: 220px; }
 
 .tag-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .tag-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .tag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.tag-name { color: #2d3440; flex: 1; }
-.tag-score { color: #8d95a3; font-size: 12px; }
+.tag-name { color: var(--color-ink); flex: 1; }
+.tag-score { color: var(--color-muted); font-size: 12px; }
 .no-data { color: #ccc; font-size: 13px; }
 
 .sentiment-stats { display: flex; gap: 16px; margin-top: 12px; }
-.stat-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #5a6577; }
+.stat-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-ink-soft); }
 .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
 
 .slide-enter-active { transition: all 0.25s ease; }

@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * ECharts 画在 Canvas 上，**不认 CSS 变量**。
+ * 直接写 'var(--color-brand)' 会得到无效色值，退化成黑色（本次改版踩过这个坑）。
+ * 所以这里把变量读成真实色值再交给图表。
+ */
+function cssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 import { ref, onMounted, onUnmounted } from 'vue'
 import {
   uploadKnowledge,
@@ -43,9 +53,9 @@ const stageLabels = {
 }
 
 const fileTypeStyle = {
-  docx: { color: '#5a8a6a', bg: '#e8f0eb' },
-  xlsx: { color: '#c4956a', bg: '#f5ede4' },
-  pdf:  { color: '#c0705a', bg: '#f5e8e4' },
+  docx: { color: cssVar('--color-brand'), bg: cssVar('--color-brand-soft') },
+  xlsx: { color: cssVar('--color-accent'), bg: cssVar('--color-accent-soft') },
+  pdf:  { color: cssVar('--color-danger'), bg: '#f5e8e4' },
 }
 
 
@@ -290,7 +300,7 @@ onUnmounted(() => {
             :percentage="uploadProgress"
             :stroke-width="8"
             :format="(p) => p + '%'"
-            color="#5a8a6a"
+            color="var(--color-brand)"
           />
           <span class="progress-hint">正在上传文件...</span>
         </div>
@@ -389,7 +399,7 @@ onUnmounted(() => {
                 :percentage="row.processProgress || 0"
                 :stroke-width="10"
                 :format="() => ''"
-                color="#5a8a6a"
+                color="var(--color-brand)"
                 class="inline-progress"
               />
               <span class="progress-text">
@@ -398,11 +408,11 @@ onUnmounted(() => {
               </span>
             </div>
             <div v-else-if="row.vectorStatus === 2" class="status-done">
-              <el-icon color="#5a8a6a"><CircleCheckFilled /></el-icon>
+              <el-icon color="var(--color-brand)"><CircleCheckFilled /></el-icon>
               <span>已完成 ({{ row.chunkCount || 0 }} 片段)</span>
             </div>
             <div v-else-if="row.vectorStatus === 3" class="status-fail">
-              <el-icon color="#e05050"><CircleCloseFilled /></el-icon>
+              <el-icon color="var(--color-danger)"><CircleCloseFilled /></el-icon>
               <span>处理失败</span>
             </div>
             <div v-else class="status-pending">
@@ -709,8 +719,8 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.status-done span { color: #5a8a6a; }
-.status-fail span { color: #e05050; }
+.status-done span { color: var(--color-brand); }
+.status-fail span { color: var(--color-danger); }
 .status-pending span { color: #999; }
 
 /* ── Empty ── */

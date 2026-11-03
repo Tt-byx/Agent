@@ -5,6 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>景区智能导览 Agent</title>
+
+    <!-- 展示字体：思源宋体（Noto Serif SC）。
+         2026-11-03 记录：不再引 Google Fonts / 镜像 CDN。
+         实测本机已装 NotoSerifSC-VF.ttf（思源宋体可变字体），而 googleapis 与
+         fonts.loli.net 在国内均不可达、jsdelivr 首次响应要 10 秒 —— 留一个
+         拉不动的远程字体，只会让首屏白等。直接用系统字体是这里最快的方案。
+         如果换到没装思源宋体的机器，tokens.css 的字体栈会退到 Songti/SimSun，
+         仍然是宋体气质，不会掉成黑体。 -->
   </head>
   <body>
     <div id="app"></div>

@@ -1,4 +1,14 @@
 <script setup>
+/**
+ * ECharts 画在 Canvas 上，**不认 CSS 变量**。
+ * 直接写 'var(--color-brand)' 会得到无效色值，退化成黑色（本次改版踩过这个坑）。
+ * 所以这里把变量读成真实色值再交给图表。
+ */
+function cssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 import { ref, onMounted } from 'vue'
 import request from '@/api/request'
 
@@ -32,7 +42,7 @@ function serviceName(key) {
 }
 
 function statusColor(s) {
-  return s === 'ok' ? '#5a8a6a' : '#c0705a'
+  return s === 'ok' ? cssVar('--color-brand') : cssVar('--color-danger')
 }
 
 function statusLabel(s) {
@@ -125,8 +135,8 @@ onMounted(checkHealth)
   justify-content: space-between;
 }
 
-.page-title { font-size: 20px; font-weight: 700; color: #2d3440; margin: 0; }
-.page-desc { font-size: 13px; color: #8d95a3; margin: 4px 0 0; }
+.page-title { font-size: 20px; font-weight: 700; color: var(--color-ink); margin: 0; }
+.page-desc { font-size: 13px; color: var(--color-muted); margin: 4px 0 0; }
 
 .status-grid {
   display: grid;
@@ -139,8 +149,8 @@ onMounted(checkHealth)
   align-items: center;
   gap: 16px;
   padding: 18px 20px;
-  background: #fff;
-  border: 1px solid #eae8e4;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
   border-radius: 10px;
 }
 
@@ -155,24 +165,24 @@ onMounted(checkHealth)
 }
 
 .status-info { display: flex; flex-direction: column; }
-.status-name { font-size: 14px; font-weight: 600; color: #2d3440; }
+.status-name { font-size: 14px; font-weight: 600; color: var(--color-ink); }
 .status-state { font-size: 13px; font-weight: 600; margin-top: 2px; }
-.status-detail { font-size: 12px; color: #8d95a3; margin-top: 2px; }
+.status-detail { font-size: 12px; color: var(--color-muted); margin-top: 2px; }
 
 .panel {
-  background: #fff;
+  background: var(--color-surface);
   border-radius: 10px;
-  border: 1px solid #eae8e4;
+  border: 1px solid var(--color-line);
   padding: 20px;
 }
 
 .panel-head {
   font-size: 14px;
   font-weight: 600;
-  color: #2d3440;
+  color: var(--color-ink);
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #eae8e4;
+  border-bottom: 1px solid var(--color-line);
 }
 
 .info-grid {
@@ -187,8 +197,8 @@ onMounted(checkHealth)
   padding: 8px 0;
 }
 
-.info-label { font-size: 12px; color: #8d95a3; }
-.info-value { font-size: 14px; color: #2d3440; font-weight: 500; margin-top: 2px; }
+.info-label { font-size: 12px; color: var(--color-muted); }
+.info-value { font-size: 14px; color: var(--color-ink); font-weight: 500; margin-top: 2px; }
 
 @media (max-width: 600px) {
   .info-grid { grid-template-columns: 1fr; }

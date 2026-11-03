@@ -1,4 +1,9 @@
-/* 全局样式 */
+/* 全局基础样式
+ * ────────────────────────────────────────────────────────────
+ * 2026-11-03 重做：字体、底色、滚动条全部改走 tokens 里的变量。
+ * 这里只放「全局重置 + 基础排版」，具体视觉在 tokens.css 与各组件里。
+ */
+
 * {
   margin: 0;
   padding: 0;
@@ -7,19 +12,73 @@
 
 html, body, #app {
   height: 100%;
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  font-family: var(--font-body);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* 滚动条样式 */
+body {
+  font-size: var(--text-base);
+  line-height: 1.7;
+  /* 中文正文需要比拉丁文更松的行距，1.7 起步 */
+  letter-spacing: 0.01em;
+}
+
+/* 标题统一用展示字体（宋体），组件里不需要再逐个声明 */
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-ink);
+  line-height: 1.2;
+}
+
+/* 数据密集处用等宽数字，避免数字跳动时宽度变化 */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 键盘可达性：所有可聚焦元素的焦点圈必须可见 */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* 滚动条：更细、更淡，不抢视觉 */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c0c4cc;
-  border-radius: 3px;
+  background: var(--color-line-strong);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 选中文字用品牌色浅底，而不是浏览器默认亮蓝 */
+::selection {
+  background: var(--color-brand-soft);
+  color: var(--color-ink);
+}
+
+/* 浏览器自动填充会强行刷成浅蓝底（#E8F0FE），和整体配色冲突。
+   这个属性 hack 是唯一可靠的覆盖方式 —— 用 inset 阴影盖住背景色。 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--color-surface) inset;
+  transition: background-color 9999s ease-out;
+  caret-color: var(--color-ink);
 }
