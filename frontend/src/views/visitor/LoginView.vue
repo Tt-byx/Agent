@@ -141,8 +141,12 @@ function toggleMode() {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;     /* 必须撑满：父级 el-main 是 justify-content:center 的 flex 容器，
+                      不写这行 .auth 会收缩到内容宽度（实测只有 280px），
+                      里面 .auth-card 的 max-width:384px 就永远不生效 */
   min-height: calc(100vh - 64px);
-  padding: var(--space-6) var(--space-5);
+  /* 上下留白要足够大，否则内容块在大屏上会「贴着中间」显得局促 */
+  padding: 96px var(--space-5);
   background: var(--color-bg);
   overflow: hidden;
 }
@@ -162,13 +166,13 @@ function toggleMode() {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 360px;    /* DeepSeek 的表单窄得像一条，视线不需要左右移动 */
+  max-width: 384px;    /* 比 DeepSeek 略宽一点：我们有「用户名+密码」两栏，太窄会挤 */
   text-align: center;
 }
 
 .auth-mark {
   color: var(--color-brand);
-  margin-bottom: var(--space-4);
+  margin-bottom: 26px;
 }
 
 .auth-title {
@@ -181,7 +185,7 @@ function toggleMode() {
 }
 
 .auth-subtitle {
-  margin: var(--space-2) 0 var(--space-7);
+  margin: 10px 0 64px;
   font-size: var(--text-sm);
   line-height: 1.7;
   color: var(--color-muted);
@@ -191,7 +195,7 @@ function toggleMode() {
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 14px;
 }
 
 /* 输入框做成「图标 + 无边框内容」的整块，边框画在外层 label 上，
@@ -202,9 +206,9 @@ function toggleMode() {
   gap: 10px;
   height: 46px;
   padding: 0 14px;
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--color-surface);
+  background: #F7F8FA;          /* 浅灰填充：聚焦前几乎看不到边框 */
   cursor: text;
   transition: border-color var(--dur-fast) ease-out,
               box-shadow var(--dur-fast) ease-out;
@@ -212,6 +216,7 @@ function toggleMode() {
 
 .field:focus-within {
   border-color: var(--color-brand);
+  background: var(--color-surface);   /* 聚焦时转为白底，边界更清楚 */
   box-shadow: 0 0 0 3px var(--color-brand-glow);
 }
 
@@ -243,6 +248,18 @@ function toggleMode() {
   color: var(--color-muted);
 }
 
+/* Chrome 自动填充会强行给 input 刷一层白底（inset 阴影 hack 之外没别的办法），
+   这里必须把它覆盖成和外层 .field 一样的浅灰 —— 否则会出现
+   「图标区浅灰、输入区白色」的割裂感。全局那条规则用的是 --color-surface（白），
+   那是给白底输入框用的，登录页需要单独覆盖。 */
+.field input:-webkit-autofill,
+.field input:-webkit-autofill:hover,
+.field input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #F7F8FA inset;
+  -webkit-text-fill-color: var(--color-ink);
+  transition: background-color 9999s ease-out;
+}
+
 /* 主按钮：墨绿实心 + 10px 圆角。
    注意不是胶囊 —— DeepSeek 的登录按钮是圆角矩形，胶囊留给次级操作。 */
 .btn-submit {
@@ -250,7 +267,7 @@ function toggleMode() {
   align-items: center;
   justify-content: center;
   height: 46px;
-  margin-top: var(--space-3);
+  margin-top: 22px;
   border: none;
   border-radius: 10px;
   background: var(--color-brand);
@@ -281,13 +298,13 @@ function toggleMode() {
 
 /* ── 切换与补充入口 ── */
 .auth-switch {
-  margin-top: var(--space-5);
+  margin-top: 30px;
   font-size: var(--text-sm);
   color: var(--color-muted);
 }
 
 .auth-note {
-  margin-top: var(--space-3);
+  margin-top: 14px;
   font-size: var(--text-xs);
   color: var(--color-muted);
 }
