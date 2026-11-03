@@ -33,6 +33,20 @@ spring:
       pool-name: scenic-mysql
       maximum-pool-size: 10
       minimum-idle: 2
+  # 2026-11-03 新增 · Redis 超时。
+  # 此前**完全没有这段配置**，用的是 Spring Boot 默认的 60 秒命令超时。
+  # 实测停掉 Redis 后，第一个涉及滑窗/限流/幂等的操作要等 53 秒才失败 ——
+  # 用户看到的就是「点发送，转圈一分钟」。
+  # 注意：一次对话会**串行访问 Redis 七八次**（限流 → 滑窗读 → 缓存查 →
+  # 幂等占位 → 滑窗写 → 摘要检查…），所以实际延迟是「超时 × 次数」。
+  # 3 秒试过，实测仍要 22 秒；本地 Redis 正常往返是 1~5ms，1 秒已经非常宽松。
+  data:
+    redis:
+      timeout: 1s
+      connect-timeout: 1s
+      # Lettuce 断线后不要无限重连，避免日志被刷满
+      lettuce:
+        shutdown-timeout: 100ms
       connection-timeout: 3000
       idle-timeout: 600000
       max-lifetime: 1740000
@@ -102,8 +116,11 @@ embedding:
   api-key: ${SCENIC_EMBEDDING_API_KEY:}
   model-name: ${SCENIC_EMBEDDING_MODEL:BAAI/bge-m3}
   dimension: 1024
-  timeout-seconds: 30
-  max-retries: 2
+  # 2026-11-03：30s -> 8s。实测停掉 pgvector 后一次问答从 3.8s 涨到 32.75s，
+  # 主要就是等这个超时。正常的 embedding 往返是 200~500ms，8 秒已经非常宽松；
+  # RAG 是「增强」不是「必需」，挂掉时必须快速降级，而不是让用户干等。
+  timeout-seconds: 8
+  max-retries: 1
 
 # 向量库：PostgreSQL + pgvector（P3 起用于知识库检索）
 pgvector:
@@ -137,7 +154,8 @@ rerank:
   base-url: ${SCENIC_RERANK_BASE_URL:https://api.siliconflow.cn/v1}
   api-key: ${SCENIC_RERANK_API_KEY:${SCENIC_EMBEDDING_API_KEY:}}
   model-name: ${SCENIC_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
-  timeout-seconds: 30
+  # 重排是可跳过环节，超时要短：宁可少一层精排，也不要拖慢整轮回答
+  timeout-seconds: 5
 
 # MCP Server（P6）：把景区工具以标准 MCP 协议暴露给外部客户端
 # 外部客户端（Cherry Studio / Claude Desktop）填 http://<host>:10086/mcp
