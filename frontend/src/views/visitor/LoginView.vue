@@ -62,506 +62,261 @@ function toggleMode() {
 </script>
 
 <template>
-  <div class="login-page">
-    <!-- 左侧：视觉区 -->
-    <div class="visual-panel">
-      <div class="bg-layer">
-        <div class="mountain mountain-far"></div>
-        <div class="mountain mountain-mid"></div>
-        <div class="mountain mountain-near"></div>
-        <div class="cloud cloud-1"></div>
-        <div class="cloud cloud-2"></div>
-        <div class="cloud cloud-3"></div>
-        <div class="mist mist-1"></div>
-        <div class="mist mist-2"></div>
+  <div class="auth">
+    <!-- 氛围层：和首页同一套极淡光晕，保持全站一致 -->
+    <div class="auth-atmosphere" aria-hidden="true"></div>
+
+    <main class="auth-card">
+      <div class="auth-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="34" height="34" fill="none">
+          <path d="M16 4 6 26h20L16 4Z" stroke="currentColor" stroke-width="1.3"
+                stroke-linejoin="round" opacity="0.45"/>
+          <path d="M16 9.5 9.5 24.5h13L16 9.5Z" stroke="currentColor"
+                stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
       </div>
 
-      <div class="visual-content">
-        <div class="brand">
-          <div class="brand-icon">
-            <svg width="40" height="40" viewBox="0 0 32 32" fill="none">
-              <path d="M16 2L4 14h8v16h8V14h8L16 2z" fill="#fff" opacity="0.9"/>
-              <path d="M10 28c0 0 2-4 6-4s6 4 6 4" stroke="#fff" stroke-width="2" fill="none" opacity="0.7"/>
-            </svg>
-          </div>
-          <h1 class="brand-title">景区 AI 导览</h1>
-          <p class="brand-sub">景区智能导览 Agent</p>
-        </div>
+      <h1 class="auth-title">景区 AI 导游</h1>
+      <p class="auth-subtitle">{{ isLogin ? '登录后，行程与偏好都会记着' : '创建账号，开始你的导览' }}</p>
 
-        <div class="visual-features">
-          <div class="feature">
-            <span class="feature-icon">📚</span>
-            <span>知识库问答 · 有据可依</span>
-          </div>
-          <div class="feature">
-            <span class="feature-icon">🗺️</span>
-            <span>路线推荐 · 个性定制</span>
-          </div>
-          <div class="feature">
-            <span class="feature-icon">🤖</span>
-            <span>工具调用 · 多步推理</span>
-          </div>
-        </div>
+      <form class="auth-form" @submit.prevent="handleSubmit">
+        <label class="field">
+          <svg class="field-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H3z"/>
+          </svg>
+          <input v-model="form.username" type="text" placeholder="请输入用户名"
+                 autocomplete="username" @keyup.enter="handleSubmit" />
+        </label>
 
-        <div class="visual-deco">
-          <span>山水之间 · 智能导览 · 有问必答</span>
-        </div>
-      </div>
-    </div>
+        <label class="field">
+          <svg class="field-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
+          </svg>
+          <input v-model="form.password" type="password" placeholder="请输入密码"
+                 autocomplete="current-password" @keyup.enter="handleSubmit" />
+        </label>
 
-    <!-- 右侧：表单区 -->
-    <div class="form-panel">
-      <div class="form-wrapper">
-        <div class="form-header">
-          <h2 class="form-title">{{ isLogin ? '欢迎回来' : '创建账号' }}</h2>
-          <p class="form-subtitle">{{ isLogin ? '登录后开始智能导览体验' : '注册即可与智能导游对话' }}</p>
-        </div>
+        <label v-if="!isLogin" class="field">
+          <!-- 昵称用「人 + 笔」的意象，不要跟密码字段的锁图标混淆 -->
+          <svg class="field-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M9 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0111.6-5.4l-1.4 1.4A5 5 0 004 18H2z"/>
+            <path d="M17.7 11.3a1 1 0 010 1.4l-4.2 4.2-1.9.5.5-1.9 4.2-4.2a1 1 0 011.4 0z"/>
+          </svg>
+          <input v-model="form.nickname" type="text" placeholder="昵称（可选，默认用用户名）"
+                 @keyup.enter="handleSubmit" />
+        </label>
 
-        <!-- Tab 切换 -->
-        <div class="mode-tabs">
-          <button class="tab" :class="{ active: isLogin }" @click="isLogin = true">登录</button>
-          <button class="tab" :class="{ active: !isLogin }" @click="isLogin = false">注册</button>
-          <div class="tab-indicator" :class="{ right: !isLogin }"></div>
-        </div>
-
-        <!-- 表单 -->
-        <div class="inputs">
-          <div class="input-group">
-            <label class="input-label">用户名</label>
-            <div class="input-wrap">
-              <svg class="input-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 10a4 4 0 100-8 4 4 0 000 8zm-7 8a7 7 0 0114 0H3z"/></svg>
-              <input v-model="form.username" type="text" placeholder="请输入用户名" @keyup.enter="handleSubmit" />
-            </div>
-          </div>
-
-          <div class="input-group">
-            <label class="input-label">密码</label>
-            <div class="input-wrap">
-              <svg class="input-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
-              <input v-model="form.password" type="password" placeholder="请输入密码" @keyup.enter="handleSubmit" />
-            </div>
-          </div>
-
-          <div class="input-group" v-if="!isLogin">
-            <label class="input-label">昵称 <span class="optional">选填</span></label>
-            <div class="input-wrap">
-              <svg class="input-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a4 4 0 100 8 4 4 0 000-8zM4 18a6 6 0 0112 0H4z"/></svg>
-              <input v-model="form.nickname" type="text" placeholder="给自己取个名字吧" @keyup.enter="handleSubmit" />
-            </div>
-          </div>
-        </div>
-
-        <button class="submit-btn" :class="{ loading }" :disabled="loading" @click="handleSubmit">
-          <span v-if="!loading">{{ btnText }}</span>
-          <span v-else class="btn-loading"><span class="spinner"></span>处理中...</span>
+        <button class="btn-submit" type="submit" :disabled="loading">
+          {{ loading ? '处理中…' : btnText }}
         </button>
+      </form>
 
-        <p class="switch-line">
-          {{ isLogin ? '还没有账号？' : '已有账号？' }}
-          <a href="#" @click.prevent="toggleMode">{{ isLogin ? '立即注册' : '返回登录' }}</a>
-        </p>
-      </div>
-    </div>
+      <p class="auth-switch">
+        {{ isLogin ? '还没有账号？' : '已经有账号了？' }}
+        <button class="link" type="button" @click="toggleMode">
+          {{ isLogin ? '立即注册' : '返回登录' }}
+        </button>
+      </p>
+
+      <p class="auth-note">
+        也可以
+        <button class="link" type="button" @click="router.push('/chat')">以游客身份直接对话</button>
+      </p>
+    </main>
   </div>
 </template>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&display=swap');
+/* ═══════════════════════════════════════════════════════════
+   登录页 —— 对照 chat.deepseek.com/sign_in 重做
+   ───────────────────────────────────────────────────────────
+   改版前的结构：左右分栏，左边一整块深绿渐变装饰面板 + 三个功能点，
+   右边一个白卡片表单。视觉重心被装饰抢走，真正要做的事（登录）反而次要。
+   DeepSeek 的做法相反：**纯白、严格居中、没有装饰**，一个 logo、
+   两三个输入框、一颗主按钮，剩下的全是留白。
+   ═══════════════════════════════════════════════════════════ */
 
-.login-page {
-  /* 2026-11-03：接到 tokens 的品牌色上，不再自己维护一套绿 */
-  --green: var(--color-brand);
-  --green-dark: var(--color-brand-hover);
-  --ink: var(--color-ink);
-
-  height: 100vh;
-  display: flex;
-  font-family: 'Noto Serif SC', 'STSong', serif;
-  overflow: hidden;
-}
-
-/* ══════ 左侧视觉区 ══════ */
-.visual-panel {
-  flex: 1;
+.auth {
   position: relative;
-  background: linear-gradient(160deg, var(--color-brand-soft) 0%, var(--color-brand-soft) 40%, var(--color-muted) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: calc(100vh - 64px);
+  padding: var(--space-6) var(--space-5);
+  background: var(--color-bg);
   overflow: hidden;
 }
 
-.bg-layer {
-  position: absolute;
+/* 极淡光晕，和首页/对话页同一套语言；透明度压到 5% 以内，只是「有空气」 */
+.auth-atmosphere {
+  position: fixed;
   inset: 0;
   pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(46rem 32rem at 50% -8%, rgba(31, 92, 67, 0.06), transparent 62%),
+    radial-gradient(38rem 28rem at 88% 92%, rgba(184, 134, 11, 0.035), transparent 60%);
 }
 
-.mountain {
-  position: absolute;
-  bottom: 0;
-  left: -5%;
-  width: 110%;
-  border-radius: 50% 50% 0 0;
-}
-
-.mountain-far {
-  height: 55%;
-  background: linear-gradient(180deg, rgba(168,195,172,0.35) 0%, rgba(168,195,172,0.1) 100%);
-  bottom: 8%;
-}
-
-.mountain-mid {
-  height: 42%;
-  background: linear-gradient(180deg, rgba(140,170,148,0.4) 0%, rgba(140,170,148,0.1) 100%);
-  bottom: 3%;
-  left: 20%;
-  width: 75%;
-}
-
-.mountain-near {
-  height: 30%;
-  background: linear-gradient(180deg, rgba(110,150,120,0.35) 0%, rgba(110,150,120,0.05) 100%);
-  left: -10%;
-  width: 65%;
-}
-
-.cloud {
-  position: absolute;
-  background: rgba(255,255,255,0.3);
-  border-radius: 100px;
-  filter: blur(20px);
-}
-
-.cloud-1 { width: 350px; height: 45px; top: 15%; left: 5%; animation: drift 25s ease-in-out infinite; }
-.cloud-2 { width: 220px; height: 35px; top: 28%; right: 10%; animation: drift 30s ease-in-out infinite reverse; }
-.cloud-3 { width: 280px; height: 40px; top: 42%; left: 30%; animation: drift 20s ease-in-out infinite 5s; }
-
-.mist {
-  position: absolute;
-  width: 100%;
-  height: 120px;
-  background: linear-gradient(180deg, transparent, rgba(255,255,255,0.15));
-  filter: blur(30px);
-}
-
-.mist-1 { bottom: 25%; }
-.mist-2 { bottom: 10%; opacity: 0.5; }
-
-@keyframes drift {
-  0%, 100% { transform: translateX(0); opacity: 0.5; }
-  50% { transform: translateX(50px); opacity: 0.85; }
-}
-
-.visual-content {
+.auth-card {
   position: relative;
-  z-index: 2;
+  z-index: 1;
+  width: 100%;
+  max-width: 360px;    /* DeepSeek 的表单窄得像一条，视线不需要左右移动 */
   text-align: center;
-  color: var(--color-surface);
-  padding: 40px;
 }
 
-.brand-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: 20px;
-  background: rgba(255,255,255,0.15);
-  backdrop-filter: blur(10px);
-  margin-bottom: 20px;
-  border: 1px solid rgba(255,255,255,0.2);
+.auth-mark {
+  color: var(--color-brand);
+  margin-bottom: var(--space-4);
 }
 
-.brand-title {
-  font-size: 36px;
-  font-weight: 700;
+.auth-title {
   margin: 0;
-  letter-spacing: 6px;
-  text-shadow: 0 2px 20px rgba(0,0,0,0.15);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-ink);
 }
 
-.brand-sub {
-  font-size: 14px;
-  margin: 10px 0 0;
-  opacity: 0.75;
-  letter-spacing: 3px;
+.auth-subtitle {
+  margin: var(--space-2) 0 var(--space-7);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--color-muted);
 }
 
-.visual-features {
-  margin-top: 48px;
+/* ── 表单 ── */
+.auth-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  align-items: center;
+  gap: var(--space-3);
 }
 
-.feature {
+/* 输入框做成「图标 + 无边框内容」的整块，边框画在外层 label 上，
+   这样点图标也能聚焦 —— 比把边框画在 input 上更好点 */
+.field {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
-  color: rgba(255,255,255,0.8);
-  letter-spacing: 1px;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 10px;
+  background: var(--color-surface);
+  cursor: text;
+  transition: border-color var(--dur-fast) ease-out,
+              box-shadow var(--dur-fast) ease-out;
 }
 
-.feature-icon {
-  font-size: 18px;
+.field:focus-within {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 3px var(--color-brand-glow);
 }
 
-.visual-deco {
-  position: absolute;
-  bottom: 30px;
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  font-size: 11px;
-  color: rgba(255,255,255,0.3);
-  letter-spacing: 2px;
+.field-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--color-muted);
+  transition: color var(--dur-fast) ease-out;
 }
 
-/* ══════ 右侧表单区 ══════ */
-.form-panel {
-  width: 480px;
-  min-width: 400px;
+.field:focus-within .field-icon {
+  color: var(--color-brand);
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  outline: none;
+}
+
+.field input::placeholder {
+  color: var(--color-muted);
+}
+
+/* 主按钮：墨绿实心 + 10px 圆角。
+   注意不是胶囊 —— DeepSeek 的登录按钮是圆角矩形，胶囊留给次级操作。 */
+.btn-submit {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-surface);
-  position: relative;
-}
-
-.form-wrapper {
-  width: 360px;
-  animation: card-enter 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes card-enter {
-  from { opacity: 0; transform: translateY(24px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.form-header {
-  margin-bottom: 32px;
-}
-
-.form-title {
-  font-family: var(--font-display);   /* 与首页、后台统一：标题用宋体 */
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--ink);
-  margin: 0;
+  height: 46px;
+  margin-top: var(--space-3);
+  border: none;
+  border-radius: 10px;
+  background: var(--color-brand);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
   letter-spacing: 0.06em;
+  color: #fff;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease-out,
+              transform var(--dur-fast) ease-out;
 }
 
-.form-subtitle {
+.btn-submit:hover:not(:disabled) {
+  background: var(--color-brand-hover);
+  transform: translateY(-1px);
+}
+
+.btn-submit:disabled {
+  background: var(--color-line-strong);
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+
+.btn-submit:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* ── 切换与补充入口 ── */
+.auth-switch {
+  margin-top: var(--space-5);
   font-size: var(--text-sm);
   color: var(--color-muted);
-  margin: 8px 0 0;
 }
 
-/* Tab */
-.mode-tabs {
-  display: flex;
-  position: relative;
-  background: rgba(90,138,106,0.06);
-  border-radius: 10px;
-  padding: 3px;
-  margin-bottom: 28px;
-}
-
-.tab {
-  flex: 1;
-  position: relative;
-  z-index: 2;
-  border: none;
-  background: transparent;
-  padding: 10px 0;
-  font-size: 13px;
-  font-weight: 600;
+.auth-note {
+  margin-top: var(--space-3);
+  font-size: var(--text-xs);
   color: var(--color-muted);
-  cursor: pointer;
-  transition: color 0.3s;
-  font-family: inherit;
-  letter-spacing: 2px;
 }
 
-.tab.active { color: var(--green-dark); }
-
-.tab-indicator {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  height: calc(100% - 6px);
-  background: var(--color-surface);
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.tab-indicator.right { transform: translateX(100%); }
-
-/* 输入框 */
-.inputs {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  animation: input-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.input-group:nth-child(1) { animation-delay: 0.1s; }
-.input-group:nth-child(2) { animation-delay: 0.2s; }
-.input-group:nth-child(3) { animation-delay: 0.3s; }
-
-@keyframes input-enter {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.input-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(44,62,47,0.55);
-  letter-spacing: 1px;
-}
-
-.input-label .optional {
-  font-weight: 400;
-  color: rgba(44,62,47,0.25);
-  font-size: 11px;
-}
-
-.input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--color-surface);
-  border: 1.5px solid rgba(90,138,106,0.12);
-  border-radius: 10px;
-  padding: 0 14px;
-  transition: all 0.25s;
-}
-
-.input-wrap:focus-within {
-  border-color: var(--green);
-  box-shadow: 0 0 0 3px rgba(90,138,106,0.07);
-}
-
-.input-icon {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  color: rgba(90,138,106,0.35);
-  transition: color 0.25s;
-}
-
-.input-wrap:focus-within .input-icon { color: var(--green); }
-
-.input-wrap input {
-  flex: 1;
+.link {
   border: none;
-  background: transparent;
-  outline: none;
-  font-size: 14px;
-  padding: 12px 0;
-  color: var(--ink);
-  font-family: inherit;
-}
-
-.input-wrap input::placeholder { color: rgba(44,62,47,0.22); }
-
-/* 按钮 */
-.submit-btn {
-  width: 100%;
-  margin-top: 26px;
-  padding: 14px;
-  border: none;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--color-brand), var(--color-brand));
-  color: var(--color-surface);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 3px;
+  background: none;
+  padding: 2px 1px;
+  font-family: var(--font-body);
+  font-size: inherit;
+  color: var(--color-brand);
   cursor: pointer;
-  transition: all 0.3s;
-  font-family: inherit;
-  position: relative;
-  overflow: hidden;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
 }
 
-.submit-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, transparent, rgba(255,255,255,0.12));
-  opacity: 0;
-  transition: opacity 0.3s;
+.link:hover {
+  color: var(--color-brand-hover);
 }
 
-.submit-btn:hover::before { opacity: 1; }
-.submit-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(90,138,106,0.3); }
-.submit-btn:active { transform: translateY(0); }
-.submit-btn.loading { opacity: 0.7; pointer-events: none; }
-
-.btn-loading { display: inline-flex; align-items: center; gap: 8px; }
-
-.spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: var(--color-surface);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+.link:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
-@keyframes spin { to { transform: rotate(360deg); } }
-
-.switch-line {
-  text-align: center;
-  font-size: 12px;
-  color: rgba(44,62,47,0.35);
-  margin: 20px 0 0;
-}
-
-.switch-line a {
-  color: var(--green);
-  text-decoration: none;
-  font-weight: 600;
-  transition: color 0.2s;
-}
-
-.switch-line a:hover { color: var(--green-dark); }
-
-/* ══════ 响应式：小屏变居中卡片 ══════ */
-@media (max-width: 860px) {
-  .login-page {
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(160deg, var(--color-brand-soft), var(--color-brand-soft), var(--color-muted));
-  }
-
-  .visual-panel {
-    display: none;
-  }
-
-  .form-panel {
-    width: 400px;
-    min-width: unset;
-    max-width: 92vw;
-    background: rgba(255,255,255,0.75);
-    backdrop-filter: blur(20px);
-    border-radius: 20px;
-    border: 1px solid rgba(255,255,255,0.4);
-    box-shadow: 0 8px 40px rgba(60,100,70,0.1);
-    padding: 40px 32px;
-  }
+@media (max-width: 480px) {
+  .auth-card { max-width: 100%; }
+  .auth-title { font-size: 20px; }
 }
 </style>

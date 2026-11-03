@@ -9,10 +9,11 @@
  *   3. 补上「登录」入口。原来未登录时右侧是空的，用户从首页根本找不到登录口，
  *      只能靠手动敲 /login。
  */
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 
 function handleLogout() {
@@ -49,7 +50,7 @@ function handleLogout() {
           <button class="nav-link" type="button" @click="handleLogout">退出</button>
         </template>
         <button
-          v-else
+          v-else-if="route.path !== '/login'"
           class="nav-cta"
           type="button"
           @click="router.push('/login')"
