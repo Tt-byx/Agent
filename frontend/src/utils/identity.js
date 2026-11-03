@@ -10,6 +10,7 @@
  */
 
 const VISITOR_KEY = 'scenic_visitor_id'
+const VISITOR_TOKEN_KEY = 'scenic_visitor_token'
 
 /** 生成一个 UUID v4（优先用浏览器原生 API，降级到随机串） */
 export function uuid() {
@@ -51,4 +52,38 @@ export function getVisitorId() {
  */
 export function newRequestId() {
   return 'req_' + uuid()
+}
+
+/* ───────────────────────── 游客凭证（后端签发的 JWT） ─────────────────────────
+ *
+ * 2026-11-03：这里原来只有前端自己生成的 visitorId，没有后端凭证。
+ * 两者作用完全不同，别混：
+ *   visitorId   —— 前端 UUID，只做限流分组，**不是凭据**
+ *   visitorToken—— 后端 /api/auth/guest 签发的 JWT，决定长期记忆算谁的
+ */
+
+export function getStoredVisitorToken() {
+  try {
+    return localStorage.getItem(VISITOR_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setStoredVisitorToken(token) {
+  try {
+    if (token) localStorage.setItem(VISITOR_TOKEN_KEY, token)
+  } catch { /* 隐私模式忽略 */ }
+}
+
+/**
+ * 登录成功 / 登出时调用：丢弃游客凭证。
+ *
+ * 不清的后果：同一浏览器先以游客 A 聊过 → 登录成用户 B → B 退出 →
+ * 又变回「游客 A」，把 A 的偏好带了回来。用户会觉得"这系统记错人了"。
+ */
+export function clearVisitorToken() {
+  try {
+    localStorage.removeItem(VISITOR_TOKEN_KEY)
+  } catch { /* 忽略 */ }
 }

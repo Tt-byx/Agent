@@ -20,7 +20,15 @@ const routes = [
         path: 'chat',
         name: 'Chat',
         component: () => import('@/views/visitor/ChatView.vue'),
-        meta: { requiresAuth: true },
+        // 2026-11-03 修复：这里原来挂着 meta: { requiresAuth: true }，
+        // 导致游客点「开始对话」直接被守卫弹到登录页。
+        //
+        // 设计上游客本来就能对话：
+        //   - 后端 POST /api/chat 支持匿名，还有 POST /api/auth/guest 专门签发游客凭证
+        //   - 游客唯一缺的是「历史会话列表」（会话归属靠 user_id，游客没有）
+        //
+        // 所以登录应该是**可选项**，不是进对话页的前置条件。
+        // 需要登录的能力（历史会话、个人信息）在页面内部自己判断，不放在路由上。
       },
     ],
   },

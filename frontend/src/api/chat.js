@@ -1,5 +1,44 @@
 import request from './request'
-import { getVisitorId } from '@/utils/identity'
+import { getVisitorId, getStoredVisitorToken, setStoredVisitorToken } from '@/utils/identity'
+import { getGuestToken } from './auth'
+
+let pendingGuestToken = null
+
+/**
+ * 2026-11-03 · 确保本地有一张**后端签发的**游客凭证，返回 token。
+ *
+ * 为什么要有它：
+ *   `getVisitorId()` 只是前端自己生成的 UUID，用来做限流分组。
+ *   但后端的 `IdentityResolver` 只认 JWT —— 拿不到 visitorToken 时，
+ *   长期记忆的归属键会退化成 sessionId，**跨会话记忆对游客直接失效**。
+ *
+ * 行为约定：
+ *   - 已登录用户返回 null（后端优先用 user:{id}，不需要游客身份）
+ *   - 未登录时：本地有就用本地的，没有就现签一张
+ *   - 并发调用只发一次请求（pendingGuestToken 去重）
+ *   - 签发失败返回 null 而不是抛异常：**对话必须能继续**，
+ *     最坏结果只是记忆退化为会话级，不该因此让用户无法提问
+ */
+export async function ensureVisitorToken() {
+  try {
+    if (localStorage.getItem('token')) return null
+    const cached = getStoredVisitorToken()
+    if (cached) return cached
+    if (!pendingGuestToken) {
+      pendingGuestToken = getGuestToken()
+        .then((data) => {
+          const token = data?.visitorToken
+          setStoredVisitorToken(token)
+          return token || null
+        })
+        .catch(() => null)
+        .finally(() => { pendingGuestToken = null })
+    }
+    return await pendingGuestToken
+  } catch {
+    return null
+  }
+}
 
 /**
  * 发送聊天消息（整段返回）
@@ -8,12 +47,14 @@ import { getVisitorId } from '@/utils/identity'
  * @param {string} [requestId] - 幂等键；同一身份 + 同一 requestId 重复提交只会真正执行一次
  * @returns {Promise<{reply: string, sessionId: string}>}
  */
-export function sendChatMessage(message, sessionId, requestId) {
+export async function sendChatMessage(message, sessionId, requestId) {
+  const visitorToken = await ensureVisitorToken()
   return request.post('/api/chat', {
     message,
     sessionId,
     requestId,
     visitorId: getVisitorId(),
+    visitorToken,
   })
 }
 
@@ -44,6 +85,10 @@ export async function streamChatMessage(message, sessionId, requestId, handlers 
   const { onMeta, onSession, onStep, onToken, onDiscard, onDone, onError } = handlers
   const allowReset = opts.allowSessionReset !== false
 
+  // 未登录时先确保有游客凭证：它决定后端把长期记忆记在谁名下。
+  // 放在 fetch 之前 await，失败也不会抛（见 ensureVisitorToken 的约定）。
+  const visitorToken = await ensureVisitorToken()
+
   let resp
   try {
     resp = await fetch('/api/chat/stream', {
@@ -55,7 +100,13 @@ export async function streamChatMessage(message, sessionId, requestId, handlers 
           ? { Authorization: `Bearer ${localStorage.getItem('token')}` }
           : {}),
       },
-      body: JSON.stringify({ message, sessionId, requestId, visitorId: getVisitorId() }),
+      body: JSON.stringify({
+        message,
+        sessionId,
+        requestId,
+        visitorId: getVisitorId(),
+        visitorToken,
+      }),
       signal,
     })
   } catch (e) {

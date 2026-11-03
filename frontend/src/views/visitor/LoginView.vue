@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 
 const isLogin = ref(true)
@@ -12,6 +13,24 @@ const form = ref({ username: '', password: '', nickname: '' })
 const loading = ref(false)
 
 const btnText = computed(() => isLogin.value ? '进入导览' : '创建账号')
+
+/**
+ * 2026-11-03 修复：登录后要回到「被踢出来之前的页面」。
+ *
+ * 原实现固定 `router.push('/chat')` —— 从 /admin/knowledge 被拦到登录页，
+ * 登录成功后却落到对话页，用户得自己再点回去。request.js 明明已经拼好了
+ * `?redirect=...`，但这里根本没读。
+ *
+ * 安全约束：只接受**站内绝对路径**（单个 / 开头）。
+ * 否则 `?redirect=//evil.com` 会变成协议相对 URL，登录后被送到外部站点（开放重定向）。
+ */
+function resolveRedirect() {
+  const raw = route.query.redirect
+  if (typeof raw !== 'string' || !raw.startsWith('/') || raw.startsWith('//')) {
+    return '/chat'
+  }
+  return raw
+}
 
 async function handleSubmit() {
   if (!form.value.username || !form.value.password) {
@@ -28,7 +47,7 @@ async function handleSubmit() {
       await userStore.registerUser(form.value.username, form.value.password, form.value.nickname)
       ElMessage.success('注册成功')
     }
-    router.push('/chat')
+    router.push(resolveRedirect())
   } catch (err) {
     ElMessage.error(err.message || '操作失败')
   } finally {

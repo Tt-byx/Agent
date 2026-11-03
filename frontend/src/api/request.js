@@ -30,6 +30,18 @@ request.interceptors.request.use(
 let isRedirecting = false
 function handleUnauthorized() {
   if (isRedirecting) return
+
+  // 2026-11-03 修复：**未登录状态下的 401 不跳转**。
+  //
+  // 原来只要收到 401 就清 token + 跳登录页。但游客本来就没有 token，
+  // 这时跳转毫无意义（本来就没登录），只会把人从对话页硬生生弹走 ——
+  // 而且弹的还是「登录已过期」，游客根本没登录过，文案也是错的。
+  //
+  // 真正需要跳转的场景只有一个：**已经登录，但 token 失效**。
+  // 游客访问到登录专属接口，应该在页面层判断（如 ChatView 的 isLoggedIn 守卫），
+  // 而不是靠全局拦截器兜底。
+  if (!localStorage.getItem('token')) return
+
   isRedirecting = true
   localStorage.removeItem('token')
   localStorage.removeItem('user')

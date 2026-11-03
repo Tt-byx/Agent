@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { login, register, getMe } from '@/api/auth'
 import { useChatStore } from '@/stores/chat'
+import { clearVisitorToken } from '@/utils/identity'
 
 export const useUserStore = defineStore('user', () => {
   const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
@@ -27,6 +28,9 @@ export const useUserStore = defineStore('user', () => {
     user.value = data.user
     localStorage.setItem('token', data.token)
     localStorage.setItem('user', JSON.stringify(data.user))
+    // 2026-11-03：登录后丢弃游客凭证。后端虽然优先用 user:{id}，
+    // 但留着这张票，等用户登出后又会被当成原游客，把旧偏好带回来。
+    clearVisitorToken()
     resetChatContext()
   }
 
@@ -60,6 +64,9 @@ export const useUserStore = defineStore('user', () => {
     user.value = null
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // 登出即回到游客态：清掉旧凭证，下次进对话页会重新领一张新身份，
+    // 不会继承上一个账号/上一个游客的记忆。
+    clearVisitorToken()
     resetChatContext()
   }
 

@@ -1,8 +1,10 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { useUserStore } from '@/stores/user'
 import { getConversations, getConversationMessages, deleteConversation, renameConversation, searchConversations } from '@/api/auth'
+import { ensureVisitorToken } from '@/api/chat'
 import ChatMessage from '@/components/chat/ChatMessage.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
@@ -10,6 +12,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const chatStore = useChatStore()
 const userStore = useUserStore()
+const router = useRouter()
 
 const conversations = ref([])
 const activeConvId = ref(null)
@@ -91,6 +94,14 @@ function sendInterestTag(tag) {
 
 // ── 对话列表管理 ──
 async function loadConversations() {
+  // 2026-11-03 修复：未登录直接返回，不发请求。
+  // 原来不管身份就请求 /api/conversations —— 游客拿到的 401 会被 request.js 的
+  // 全局拦截器接住，弹出「登录已过期」并强制跳登录页。
+  // 这是「点开始对话被弹到登录页」的第二个原因（第一个是路由守卫的 requiresAuth）。
+  if (!userStore.isLoggedIn()) {
+    conversations.value = []
+    return
+  }
   try {
     const data = await getConversations()
     conversations.value = Array.isArray(data) ? data : []
@@ -173,8 +184,10 @@ function formatTime(time) {
 }
 
 onMounted(async () => {
-  // 2026-10-29（D30 收尾）：SSE 是「按需建立、用完即断」，不需要在页面挂载时预热长连接，
-  // 所以这里不再调用（已删除的）initWebSocket。
+  // 2026-11-03：游客进对话页时先领一张游客凭证（决定长期记忆记在谁名下）。
+  // 故意不 await —— 它和下面的初始化并行，不能拖慢首屏；
+  // 真正发消息时 streamChatMessage 内部还会再 ensure 一次（同一个请求会被去重）。
+  ensureVisitorToken()
   await userStore.fetchMe()
   await loadLastConversation()
 })
@@ -196,7 +209,11 @@ onUnmounted(() => {
           <div v-if="chatStore.messages.length === 0" class="interest-tags">
             <p class="tags-title">🎯 我感兴趣的方向</p>
             <div class="tags-row">
-              <el-tag v-for="tag in interestTags" :key="tag.label" :type="tag.type"
+              <!-- 2026-11-03 修复：type 不能传空字符串。
+                   ElTag 的 type 只接受 primary/success/info/warning/danger 或 undefined，
+                   传 '' 会触发 prop 校验失败，控制台刷 "Invalid prop: validation failed"。
+                   `|| undefined` 让「没有配色」的标签回到默认外观，同时不触发警告。 -->
+              <el-tag v-for="tag in interestTags" :key="tag.label" :type="tag.type || undefined"
                 class="interest-tag" effect="plain" @click="sendInterestTag(tag)">
                 {{ tag.icon }} {{ tag.label }}
               </el-tag>
@@ -204,10 +221,13 @@ onUnmounted(() => {
             <div class="duration-row">
               <span class="duration-label">⏱ 可用时间：</span>
               <el-radio-group v-model="selectedDuration" size="small">
+                <!-- 2026-11-03 修复：Element Plus 2.6+ 起 radio 的取值属性从 label 改为 value，
+                     label 只作为显示文本。这里原来用 :label 传值，控制台会刷
+                     "[el-radio] label act as value is about to be deprecated in version 3.0.0"。 -->
                 <el-radio-button
                   v-for="d in durationOptions"
                   :key="d.value"
-                  :label="d.value"
+                  :value="d.value"
                 >{{ d.label }}</el-radio-button>
               </el-radio-group>
               <el-button v-if="selectedDuration" text size="small" @click="selectedDuration = ''">清除</el-button>
@@ -245,6 +265,14 @@ onUnmounted(() => {
           </el-button>
         </div>
 
+        <!-- 游客没有会话归属（conversation.user_id 为空），看不到历史也搜不了，
+             所以整块搜索 + 列表换成登录引导，而不是显示一个空列表 -->
+        <div v-if="!userStore.isLoggedIn()" class="history-guest-tip">
+          <p>登录后可以保存历史对话，随时接着聊。</p>
+          <el-button type="primary" size="small" @click="router.push('/login')">去登录</el-button>
+        </div>
+
+        <template v-else>
         <!-- 搜索区域 -->
         <div class="search-section">
           <el-input
@@ -312,6 +340,7 @@ onUnmounted(() => {
           </div>
           <div v-if="conversations.length === 0" class="history-empty">暂无历史对话</div>
         </div>
+        </template>
       </div>
     </div>
   </div>
@@ -355,6 +384,8 @@ onUnmounted(() => {
 .action-icon.danger:hover { color: #e05050; background: rgba(224,80,80,0.1); }
 .rename-input { width: 100%; border: 1px solid #5a8a6a; border-radius: 4px; padding: 4px 8px; font-size: 13px; outline: none; font-family: inherit; }
 .history-empty { text-align: center; color: #ccc; font-size: 13px; padding: 32px 0; }
+.history-guest-tip { padding: 28px 16px; text-align: center; color: #999; font-size: 13px; line-height: 1.7; }
+.history-guest-tip p { margin: 0 0 12px; }
 .search-section { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; flex-shrink: 0; }
 .search-section :deep(.el-date-editor) { --el-date-editor-width: 100%; }
 .conv-snippet { font-size: 11px; color: #999; margin-top: 3px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
