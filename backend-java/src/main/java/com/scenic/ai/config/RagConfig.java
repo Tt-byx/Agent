@@ -1,5 +1,7 @@
 package com.scenic.ai.config;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -12,6 +14,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Primary;
 
+import javax.sql.DataSource;
 import java.time.Duration;
 
 /**
@@ -63,6 +66,19 @@ public class RagConfig {
     @Value("${pgvector.create-table:true}")
     private Boolean pgCreateTable;
 
+    /**
+     * 2026-11-03 新增：pgvector 连接超时。
+     *
+     * <p>此前三个 store 都用 {@code PgVectorEmbeddingStore.builder().host(...)} 那套，
+     * 内部会自建 HikariCP，**connectionTimeout 取默认的 30 秒**。
+     * 实测停掉 pgvector 后，一次问答从 3.8s 涨到 32.75s —— 等的就是这个超时。
+     *
+     * <p>RAG 是「增强」不是「必需」，依赖挂掉时必须快速降级。
+     * 5 秒已经覆盖正常建连（本地 <50ms），也不会让用户干等半分钟。
+     */
+    @Value("${pgvector.connect-timeout-ms:5000}")
+    private Long pgConnectTimeoutMs;
+
     @Bean
     public EmbeddingModel embeddingModel() {
         warnIfKeyMissing();
@@ -77,18 +93,70 @@ public class RagConfig {
                 .build();
     }
 
+    /**
+     * 三个向量 store 共用的数据源。
+     *
+     * <p>单独抽出来是为了**控制连接超时**：builder().host(...) 那套内部自建 HikariCP，
+     * connectionTimeout 只能用默认 30 秒。这里显式建池，把它压到 5 秒。
+     *
+     * <p>{@code initializationFailTimeout(-1)}：pgvector 没起来也允许应用启动，
+     * 真正的失败留到第一次用时由上层 catch 降级（与原来 @Lazy 的意图一致）。
+     */
+    /**
+     * pgvector 连接池的持有者。
+     *
+     * <p><b>为什么不用 {@code @Bean DataSource} 直接暴露</b>：
+     * Spring Boot 的 {@code DataSourceAutoConfiguration} 带
+     * {@code @ConditionalOnMissingBean(DataSource.class)} —— 只要容器里出现**任何**
+     * DataSource bean，MySQL 的自动配置就整体退让。实测直接把 HikariDataSource 注册成
+     * bean 之后，MyBatis 拿到了 pgvector 的数据源，查 MySQL 的 conversation 表时报
+     * {@code relation "conversation" does not exist}，整个应用 500。
+     *
+     * <p>所以这里用一个**自定义类型**包装，既能让三个 store 共用同一个池、
+     * 又能自己控制 close，还不干扰自动配置。
+     */
+    public static class PgVectorDataSourceHolder {
+        private final HikariDataSource dataSource;
+
+        PgVectorDataSourceHolder(HikariDataSource dataSource) {
+            this.dataSource = dataSource;
+        }
+
+        public DataSource dataSource() {
+            return dataSource;
+        }
+
+        @jakarta.annotation.PreDestroy
+        public void close() {
+            dataSource.close();
+        }
+    }
+
+    @Bean
+    @Lazy
+    public PgVectorDataSourceHolder pgVectorDataSourceHolder() {
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl("jdbc:postgresql://" + pgHost + ":" + pgPort + "/" + pgDatabase);
+        cfg.setUsername(pgUser);
+        cfg.setPassword(pgPassword);
+        cfg.setMaximumPoolSize(4);
+        cfg.setMinimumIdle(1);
+        cfg.setConnectionTimeout(pgConnectTimeoutMs);   // 关键：30s -> 5s
+        cfg.setValidationTimeout(Math.min(pgConnectTimeoutMs, 2000));
+        cfg.setInitializationFailTimeout(-1);           // 不因 pgvector 未就绪而启动失败
+        cfg.setPoolName("scenic-pgvector");
+        log.info("初始化 pgvector 连接池: {}:{}/{}，连接超时 {}ms",
+                pgHost, pgPort, pgDatabase, pgConnectTimeoutMs);
+        return new PgVectorDataSourceHolder(new HikariDataSource(cfg));
+    }
+
     @Bean
     @Primary
     @Lazy
-    public EmbeddingStore<TextSegment> embeddingStore() {
-        log.info("初始化 pgvector 向量库: {}:{}/{} (table={}, dim={})",
-                pgHost, pgPort, pgDatabase, pgTable, pgDimension);
-        return PgVectorEmbeddingStore.builder()
-                .host(pgHost)
-                .port(pgPort)
-                .database(pgDatabase)
-                .user(pgUser)
-                .password(pgPassword)
+    public EmbeddingStore<TextSegment> embeddingStore(PgVectorDataSourceHolder pgHolder) {
+        log.info("初始化 pgvector 向量库: table={}, dim={}", pgTable, pgDimension);
+        return PgVectorEmbeddingStore.datasourceBuilder()
+                .datasource(pgHolder.dataSource())
                 .table(pgTable)
                 .dimension(pgDimension)
                 .createTable(pgCreateTable)
@@ -98,14 +166,10 @@ public class RagConfig {
     /** P8 · 长期记忆：游客偏好（按人存储的事实性偏好，带向量便于按相关度召回） */
     @Bean(name = "visitorMemoryStore")
     @Lazy
-    public EmbeddingStore<TextSegment> visitorMemoryStore() {
+    public EmbeddingStore<TextSegment> visitorMemoryStore(PgVectorDataSourceHolder pgHolder) {
         log.info("初始化长期记忆向量库: table=visitor_memory, dim={}", pgDimension);
-        return PgVectorEmbeddingStore.builder()
-                .host(pgHost)
-                .port(pgPort)
-                .database(pgDatabase)
-                .user(pgUser)
-                .password(pgPassword)
+        return PgVectorEmbeddingStore.datasourceBuilder()
+                .datasource(pgHolder.dataSource())
                 .table("visitor_memory")
                 .dimension(pgDimension)
                 .createTable(true)
@@ -115,14 +179,10 @@ public class RagConfig {
     /** P8 · 语义缓存：问题向量 -> 已生成答案，命中后跳过模型调用 */
     @Bean(name = "semanticCacheStore")
     @Lazy
-    public EmbeddingStore<TextSegment> semanticCacheStore() {
+    public EmbeddingStore<TextSegment> semanticCacheStore(PgVectorDataSourceHolder pgHolder) {
         log.info("初始化语义缓存向量库: table=semantic_cache, dim={}", pgDimension);
-        return PgVectorEmbeddingStore.builder()
-                .host(pgHost)
-                .port(pgPort)
-                .database(pgDatabase)
-                .user(pgUser)
-                .password(pgPassword)
+        return PgVectorEmbeddingStore.datasourceBuilder()
+                .datasource(pgHolder.dataSource())
                 .table("semantic_cache")
                 .dimension(pgDimension)
                 .createTable(true)

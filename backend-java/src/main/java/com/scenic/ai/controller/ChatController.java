@@ -4,6 +4,7 @@ import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.dto.ChatRequest;
 import com.scenic.ai.dto.ChatResponse;
 import com.scenic.ai.dto.Result;
+import com.scenic.ai.exception.ApiException;
 import com.scenic.ai.gateway.RateLimiter;
 import com.scenic.ai.service.ChatService;
 import com.scenic.ai.web.TraceIdFilter;
@@ -22,6 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -100,6 +103,29 @@ public class ChatController {
      */
     private final ExecutorService sseExecutor = createSseExecutor();
 
+    /**
+     * 2026-11-03 · SSE 心跳调度器。
+     *
+     * <p>为什么需要：TCP 半开时服务端**无法立即感知**客户端已离开，
+     * 只有当某次 write 撞上 RST 才会报错。如果模型正在长时间生成、期间没有任何推送，
+     * 断连就检测不到 —— 实测客户端 2 秒断开后，后端仍跑完了完整的 3 次工具调用。
+     * 用户已经走了，token 还在花。
+     *
+     * <p>每 {@link #HEARTBEAT_SECONDS} 秒推一个空 ping，把「发现断连」的延迟
+     * 压到一个心跳周期以内。ping 事件前端不认识，走 default 分支忽略即可。
+     *
+     * <p>单线程足够：心跳只做一次 send，不占 CPU。
+     */
+    private final ScheduledExecutorService heartbeatScheduler =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "sse-heartbeat");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** 心跳间隔：8 秒。太短会刷无谓的帧，太长则断开后仍会多花钱。 */
+    private static final long HEARTBEAT_SECONDS = 8;
+
     private ExecutorService createSseExecutor() {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(
                 8, 8, 0L, TimeUnit.MILLISECONDS,
@@ -130,7 +156,8 @@ public class ChatController {
             Thread.currentThread().interrupt();
             sseExecutor.shutdownNow();
         }
-        log.info("[SSE] 工作线程池已关闭");
+        heartbeatScheduler.shutdownNow();
+        log.info("[SSE] 工作线程池与心跳调度器已关闭");
     }
 
     /** 同步对话：整段返回 */
@@ -142,7 +169,11 @@ public class ChatController {
         // Wave 3：带上维度标签，指标能区分「按身份限流」还是「按 IP 限流」
         if (!rateLimiter.allow(subject.value(), subject.dimension())) {
             log.info("[RATE] 拒绝请求：key={}", subject.value());
-            return Result.error(429, "您的提问有点太频繁了，请休息一下再问～");
+            // 2026-11-03：改成抛异常而不是 return Result.error。
+            // 原来返回的是 HTTP 200 + body.code=429 —— 前端能处理，
+            // 但标准客户端、网关、监控（http_requests_total{status="429"}）全都看不到。
+            // GlobalExceptionHandler 会把 ApiException 映射成 ResponseEntity.status(code)。
+            throw ApiException.tooManyRequests("您的提问有点太频繁了，请休息一下再问～");
         }
 
         ChatResponse response = chatService.chat(request);
@@ -169,14 +200,12 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(streamTimeoutMs);
 
         if (!rateLimiter.allow(subject.value(), subject.dimension())) {
-            try {
-                emitter.send(SseEmitter.event().name("error")
-                        .data("您的提问有点太频繁了，请休息一下再问～"));
-            } catch (Exception ignored) {
-                // 客户端可能已断开
-            }
-            emitter.complete();
-            return emitter;
+            // 2026-11-03：与同步接口保持一致 —— 限流时返回真正的 HTTP 429，
+            // 而不是「200 + 一个 SSE error 事件」。
+            // 此刻事件流还没开始推送，用 429 语义更准确，网关和监控也能识别。
+            // 前端 streamChatMessage 里已有 `resp.status === 429` 的分支，兼容。
+            log.info("[RATE] 拒绝流式请求：key={}", subject.value());
+            throw ApiException.tooManyRequests("您的提问有点太频繁了，请休息一下再问～");
         }
 
         String traceId = TraceIdFilter.currentTraceId();
@@ -201,6 +230,21 @@ public class ChatController {
             log.info("[SSE] emitter 超时，标记客户端已离开");
         });
         emitter.onError(e -> clientGone.set(true));
+
+        // 心跳：每 8 秒推一个空事件，顺便探测连接是否还在
+        final ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            if (clientGone.get()) {
+                return;
+            }
+            try {
+                emitter.send(SseEmitter.event().name("ping").data(""));
+            } catch (Exception e) {
+                // 只有第一次失败时打日志，避免每 8 秒刷一条
+                if (clientGone.compareAndSet(false, true)) {
+                    log.info("[SSE] 心跳推送失败，判定客户端已离开: {}", e.getMessage());
+                }
+            }
+        }, HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS);
 
         try {
             sseExecutor.execute(() -> {
@@ -274,6 +318,7 @@ public class ChatController {
                     push(emitter, clientGone, "error", "服务内部错误，请稍后重试");
                     emitter.complete();
                 } finally {
+                    heartbeat.cancel(false);
                     // 线程池会复用这条 worker 线程：必须清掉身份，
                     // 否则下一个请求可能意外继承到上一个用户的身份（越权风险）。
                     SecurityContextHolder.clearContext();
