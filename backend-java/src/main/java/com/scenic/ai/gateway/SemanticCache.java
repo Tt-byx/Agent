@@ -1,5 +1,6 @@
 package com.scenic.ai.gateway;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.rag.store.VectorStoreAdmin;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.segment.TextSegment;
@@ -124,6 +125,7 @@ public class SemanticCache {
             }
             return Optional.empty();
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("语义缓存查询失败（降级为未命中）: {}", e.getMessage());
             return Optional.empty();
         }
@@ -158,6 +160,7 @@ public class SemanticCache {
             log.info("[CACHE] 已缓存问答对（query={}）", abbreviate(query));
             enforceCapacity();
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("语义缓存写入失败: {}", e.getMessage());
         }
     }
@@ -188,6 +191,7 @@ public class SemanticCache {
         try {
             vectorStoreAdmin.deleteOldestEntries(TABLE, TIMESTAMP_KEY, maxEntries);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // 淘汰失败不影响读写：最坏是缓存表偏大
             log.warn("语义缓存容量淘汰失败（不影响读写）: {}", e.getMessage());
         }

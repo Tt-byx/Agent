@@ -1,5 +1,6 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.dto.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -37,6 +38,7 @@ public class SystemConfigController {
         try (Connection conn = dataSource.getConnection()) {
             status.put("mysql", Map.of("status", "ok", "database", conn.getCatalog()));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             status.put("mysql", Map.of("status", "error", "message", e.getMessage()));
         }
 
@@ -46,6 +48,7 @@ public class SystemConfigController {
                     connection -> connection.ping());
             status.put("redis", Map.of("status", "ok"));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             status.put("redis", Map.of("status", "error", "message", e.getMessage()));
         }
 

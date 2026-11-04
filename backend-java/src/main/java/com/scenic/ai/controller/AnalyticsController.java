@@ -1,5 +1,6 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.dto.Result;
 import com.scenic.ai.service.AnalyticsService;
@@ -32,6 +33,7 @@ public class AnalyticsController {
             Map<String, Object> result = analyticsService.importXlsx(filePath);
             return Result.success(result);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             return Result.error(500, "导入失败: " + e.getMessage());
         }
     }
@@ -117,6 +119,7 @@ public class AnalyticsController {
             result.put("suggestions", r.answer());
             return Result.success(result);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("生成营销建议失败: {}", e.getMessage());
             return Result.error(500, "营销建议生成失败，请稍后重试");
         }

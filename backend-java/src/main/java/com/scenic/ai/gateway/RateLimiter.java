@@ -1,5 +1,6 @@
 package com.scenic.ai.gateway;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -98,6 +99,7 @@ public class RateLimiter {
             }
             return allowed;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("限流检查失败（Redis 不可用，放行）: {}", e.getMessage());
             return true;
         }

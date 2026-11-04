@@ -1,5 +1,6 @@
 package com.scenic.ai.gateway;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 
@@ -120,6 +121,7 @@ public final class RouteExecutor {
                     throw e;
 
                 } catch (Exception e) {
+                    RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                     long costMillis = System.currentTimeMillis() - start;
                     boolean retriable = retryPolicy.isRetriable(e);
                     boolean hasNextAttempt = attempt < retryPolicy.maxAttempts();

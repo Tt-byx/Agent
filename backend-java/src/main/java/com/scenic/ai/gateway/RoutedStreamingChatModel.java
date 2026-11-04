@@ -1,5 +1,6 @@
 package com.scenic.ai.gateway;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -81,6 +82,7 @@ public class RoutedStreamingChatModel implements StreamingChatModel {
             handler.onError(e.getCause() == null ? e : e.getCause());
             return;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             handler.onError(e);
             return;
         }

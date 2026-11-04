@@ -1,5 +1,6 @@
 package com.scenic.ai.memory;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -84,6 +85,7 @@ public class ShortTermMemory {
                     objectMapper.writeValueAsString(new Turn(role, content)),
                     String.valueOf(TTL.toSeconds()));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("短期记忆写入失败（不影响主流程）: {}", e.getMessage());
         }
     }
@@ -116,6 +118,7 @@ public class ShortTermMemory {
                 }
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("短期记忆读取失败（降级为无记忆）: {}", e.getMessage());
         }
         return alignToTurnBoundary(result);
@@ -151,6 +154,7 @@ public class ShortTermMemory {
             Long size = redis.opsForList().size(KEY_PREFIX + sessionId);
             return size == null ? 0 : size;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // 2026-10-29（D19）· 这里必须打日志。返回 0 在语义上有二义性 ——
             // 「这轮没有记忆」和「我不知道有多少」混在一起，调用方无法区分。
             // 更糟的是 0 会被 AgentLoop 当成「没超窗」从而跳过摘要；等 Redis 恢复后
@@ -189,6 +193,7 @@ public class ShortTermMemory {
                 }
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("短期记忆滑出失败: {}", e.getMessage());
         }
         return drained;
@@ -198,6 +203,7 @@ public class ShortTermMemory {
         try {
             redis.opsForValue().set(String.format(SUMMARY_KEY, sessionId), summary, TTL);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("写入会话摘要失败: {}", e.getMessage());
         }
     }
@@ -206,6 +212,7 @@ public class ShortTermMemory {
         try {
             return redis.opsForValue().get(String.format(SUMMARY_KEY, sessionId));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // D19：null 表示「没有摘要」，同样不能把「读失败」混进去 ——
             // 读失败会让 summarize() 以为没有旧摘要，于是覆盖写，历史摘要就丢了。
             log.warn("会话摘要读取失败（按无摘要处理，可能导致摘要被覆盖）: {}", e.getMessage());

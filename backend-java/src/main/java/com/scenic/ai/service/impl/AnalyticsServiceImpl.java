@@ -1,5 +1,6 @@
 package com.scenic.ai.service.impl;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.scenic.ai.entity.TourismData;
 import com.scenic.ai.mapper.TourismDataMapper;
@@ -130,6 +131,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
             data.setCreatedAt(LocalDateTime.now());
             return data;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.debug("跳过无效行 {}: {}", row.getRowNum(), e.getMessage());
             return null;
         }
@@ -200,6 +202,7 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         try {
             return LocalDate.parse(cell.toString().trim().substring(0, 10));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             return null;
         }
     }

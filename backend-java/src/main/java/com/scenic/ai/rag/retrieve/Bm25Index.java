@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.retrieve;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -121,6 +122,7 @@ public class Bm25Index {
                 docIdx++;
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("BM25 索引加载失败（关键词检索将不可用）: {}", e.getMessage());
             // 失败也走单次发布：清空快照，而不是逐个字段清零（那又会造出中间态）
             this.snapshot = Snapshot.EMPTY;

@@ -1,5 +1,6 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.dto.Result;
 import com.scenic.ai.entity.Conversation;
@@ -66,6 +67,7 @@ public class AdminAIController {
             result.put("reply", r.answer());
             return Result.success(result);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("AI问答失败: {}", e.getMessage());
             return Result.error(500, "AI服务暂时不可用");
         }
@@ -107,6 +109,7 @@ public class AdminAIController {
             result.put("suggestions", r.answer());
             return Result.success(result);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("推荐生成失败: {}", e.getMessage());
             return Result.error(500, "推荐服务暂时不可用");
         }

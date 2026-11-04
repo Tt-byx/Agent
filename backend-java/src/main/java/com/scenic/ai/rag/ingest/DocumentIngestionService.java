@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.ingest;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.gateway.AgentMetrics;
 import com.scenic.ai.rag.retrieve.Bm25Index;
 import com.scenic.ai.rag.store.VectorStoreAdmin;
@@ -114,6 +115,7 @@ public class DocumentIngestionService {
         try {
             store.addAll(embeddings, segments);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             rollbackPartialWrite(store, docId, oldEmbeddingIds);
             throw new IOException("向量写入失败：" + e.getMessage(), e);
         }
@@ -171,6 +173,7 @@ public class DocumentIngestionService {
             log.warn("文档 {} 写入失败，已回滚本次写入的 {} 条残留向量（旧数据保持不变）",
                     docId, current.size());
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("文档 {} 的残留向量回滚失败，需通过 /api/rag/reconcile 对账后重跑导入", docId, e);
         }
     }
@@ -189,6 +192,7 @@ public class DocumentIngestionService {
             store.removeAll(oldEmbeddingIds);
             log.info("已清理文档 id={} 的 {} 条旧向量", docId, oldEmbeddingIds.size());
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             metrics.degrade("ingest_cleanup");
             log.warn("文档 {} 的旧向量清理失败（新旧共存，重跑一次导入即可自愈）: {}",
                     docId, e.getMessage());
@@ -202,6 +206,7 @@ public class DocumentIngestionService {
         try {
             onProgress.accept(stage, percent);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("进度回调失败（不影响导入）: {}", e.getMessage());
         }
     }

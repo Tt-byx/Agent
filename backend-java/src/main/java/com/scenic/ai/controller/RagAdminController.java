@@ -1,5 +1,6 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.dto.Result;
 import com.scenic.ai.rag.eval.RagEvalRunner;
 import com.scenic.ai.rag.ingest.DocumentIngestionService;
@@ -88,6 +89,7 @@ public class RagAdminController {
                     file, type);
             return Result.success(result);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("导入失败: {}", path, e);
             return Result.error(500, "导入失败: " + e.getMessage());
         }
@@ -119,6 +121,7 @@ public class RagAdminController {
                     results.add(ingestionService.ingest(
                             registeredId, file.getFileName().toString(), file, extension(file)));
                 } catch (Exception e) {
+                    RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                     log.error("文件导入失败: {}", file, e);
                     results.add(Map.of(
                             "file", file.getFileName().toString(),
@@ -126,6 +129,7 @@ public class RagAdminController {
                 }
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             return Result.error(500, "扫描目录失败: " + e.getMessage());
         }
 

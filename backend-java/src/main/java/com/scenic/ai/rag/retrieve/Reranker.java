@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.retrieve;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -104,6 +105,7 @@ public class Reranker {
             return ranked;
 
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // A5 · 失败埋点：重排长期静默失效会导致检索质量悄悄退化到「混合」档，
             // 没有指标就只能靠评测才发觉。命中率在 Grafana 面板上应接近 100%。
             meterRegistry.counter("scenic.rerank.calls", "result", "failure").increment();

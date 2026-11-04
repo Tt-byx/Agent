@@ -1,5 +1,6 @@
 package com.scenic.ai.service;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.entity.KnowledgeDoc;
 import com.scenic.ai.mapper.KnowledgeDocMapper;
 import com.scenic.ai.rag.ingest.DocumentIngestionService;
@@ -82,6 +83,7 @@ public class DocumentProcessService {
             log.info("[DOC-PROCESS] 文档处理完成: id={}, chunkCount={}", id, result.chunkCount());
 
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("[DOC-PROCESS] 文档处理失败: id={}, error={}", id, e.getMessage(), e);
             updateProgress(id, STATUS_FAILED, "failed", 0);
         }

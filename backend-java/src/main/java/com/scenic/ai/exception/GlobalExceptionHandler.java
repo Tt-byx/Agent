@@ -1,6 +1,7 @@
 package com.scenic.ai.exception;
 
 import com.scenic.ai.dto.Result;
+import com.scenic.ai.exception.RedisShortCircuitException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -20,6 +21,19 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class GlobalExceptionHandler {
 
     /** 业务异常：按声明的状态码返回 */
+    /**
+     * Redis 短路 —— 服务降级。
+     *
+     * <p>和普通业务异常分开处理：短路意味着「依赖挂了」而不是「请求不合法」，
+     * 应该返回 503（Service Unavailable）让客户端知道可重试，
+     * 而不是 200 + 提示语（那样监控看不到降级，重试策略也不对）。
+     */
+    @ExceptionHandler(RedisShortCircuitException.class)
+    public ResponseEntity<Result<Void>> handleShortCircuit(RedisShortCircuitException e) {
+        log.warn("[DEGRADE] Redis 短路中，返回 503：{}", e.getMessage());
+        return ResponseEntity.status(503).body(Result.error(503, e.getMessage()));
+    }
+
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Result<Void>> handleApiException(ApiException e) {
         log.info("[API] {} -> {}", e.getCode(), e.getMessage());

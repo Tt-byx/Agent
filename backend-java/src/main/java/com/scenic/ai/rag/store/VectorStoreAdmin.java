@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.store;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
@@ -70,6 +71,7 @@ public class VectorStoreAdmin {
                     String.class, String.valueOf(docId));
             return new ArrayList<>(ids);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("[VECTOR-ADMIN] 查询文档 {} 的向量 ID 失败（按「无旧数据」处理）: {}", docId, e.getMessage());
             return new ArrayList<>();
         }
@@ -91,6 +93,7 @@ public class VectorStoreAdmin {
                 }
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("[VECTOR-ADMIN] 按文档统计向量条数失败: {}", e.getMessage());
             throw new IllegalStateException("向量库不可用：" + e.getMessage(), e);
         }
@@ -109,6 +112,7 @@ public class VectorStoreAdmin {
             countAll();
             return true;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             return false;
         }
     }

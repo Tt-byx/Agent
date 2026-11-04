@@ -1,5 +1,6 @@
 package com.scenic.ai.memory;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.rag.store.VectorStoreAdmin;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
@@ -121,6 +122,7 @@ public class LongTermMemory {
             enforceCapacity(memoryKey);
 
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("长期记忆写入失败（不影响主流程）: {}", e.getMessage());
         }
     }
@@ -149,6 +151,7 @@ public class LongTermMemory {
                     String.format("%.3f", match.score()), match.embedded().text());
             return true;
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // 查重失败时**放行写入**：宁可重复一条，也不要因为查重挂了把记忆丢掉
             log.warn("长期记忆去重检查失败（按「不重复」处理，继续写入）: {}", e.getMessage());
             return false;
@@ -168,6 +171,7 @@ public class LongTermMemory {
                         memoryKey, total, maxFactsPerVisitor, deleted);
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // 淘汰失败不影响读写：最坏是表偏大
             log.warn("长期记忆容量淘汰失败（不影响读写）: {}", e.getMessage());
         }
@@ -195,6 +199,7 @@ public class LongTermMemory {
                 log.info("[MEMORY] 召回 {} 条偏好（key={}）：{}", facts.size(), memoryKey, facts);
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("长期记忆召回失败（降级为无偏好）: {}", e.getMessage());
         }
         return facts;

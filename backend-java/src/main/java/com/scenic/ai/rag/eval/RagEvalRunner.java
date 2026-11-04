@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.eval;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.rag.retrieve.HybridRetriever;
 import com.scenic.ai.rag.retrieve.RagRetriever;
 import dev.langchain4j.data.embedding.Embedding;
@@ -91,6 +92,7 @@ public class RagEvalRunner {
                 items.add(new Item(++no, parts[0].strip(), parts[1].strip()));
             }
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.error("评测集加载失败: {}", e.getMessage());
         }
         return items;
@@ -123,6 +125,7 @@ public class RagEvalRunner {
                         }
                     }
                 } catch (Exception e) {
+                    RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                     log.warn("评测第 {} 条（{}）失败: {}", item.no(), entry.getKey(), e.getMessage());
                 }
                 firstHitRank.put(entry.getKey(), rank);
@@ -169,6 +172,7 @@ public class RagEvalRunner {
                 Embedding b = embeddingModel.embed(pair[1]).content();
                 similarity = cosine(a.vector(), b.vector());
             } catch (Exception e) {
+                RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                 log.warn("对抗样本相似度计算失败: {}", e.getMessage());
             }
             boolean wouldMisHit = similarity >= cacheThreshold;

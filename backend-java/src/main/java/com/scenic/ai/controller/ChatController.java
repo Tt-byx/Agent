@@ -1,5 +1,6 @@
 package com.scenic.ai.controller;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.scenic.ai.agent.core.AgentLoop;
 import com.scenic.ai.dto.ChatRequest;
 import com.scenic.ai.dto.ChatResponse;
@@ -239,6 +240,7 @@ public class ChatController {
             try {
                 emitter.send(SseEmitter.event().name("ping").data(""));
             } catch (Exception e) {
+                RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                 // 只有第一次失败时打日志，避免每 8 秒刷一条
                 if (clientGone.compareAndSet(false, true)) {
                     log.info("[SSE] 心跳推送失败，判定客户端已离开: {}", e.getMessage());
@@ -314,6 +316,7 @@ public class ChatController {
                     push(emitter, clientGone, "error", e.getMessage());
                     emitter.complete();
                 } catch (Exception e) {
+                    RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
                     log.error("[SSE] 流式对话失败", e);
                     push(emitter, clientGone, "error", "服务内部错误，请稍后重试");
                     emitter.complete();
@@ -347,6 +350,7 @@ public class ChatController {
         try {
             emitter.send(SseEmitter.event().name(event).data(data));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             clientGone.set(true);
             log.debug("[SSE] 推送失败，判定客户端已断开（后续事件跳过）: {}", e.getMessage());
         }
@@ -405,6 +409,7 @@ public class ChatController {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // 理论上不会发生；兜底为空字符串，不因序列化失败中断流式
             return "\"\"";
         }

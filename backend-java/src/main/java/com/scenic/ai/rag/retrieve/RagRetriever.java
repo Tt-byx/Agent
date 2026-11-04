@@ -1,5 +1,6 @@
 package com.scenic.ai.rag.retrieve;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
@@ -85,6 +86,7 @@ public class RagRetriever {
             return chunks;
 
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("知识库检索失败，将使用无上下文模式: {}", e.getMessage());
             return List.of();
         }

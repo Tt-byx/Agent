@@ -1,5 +1,6 @@
 package com.scenic.ai.gateway;
 
+import com.scenic.ai.exception.RedisShortCircuitException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.scenic.ai.dto.ChatResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -77,6 +78,7 @@ public class IdempotencyStore {
             }
             return objectMapper.readValue(json, ChatResponse.class);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("幂等结果读取失败（按未命中处理）: {}", e.getMessage());
             return null;
         }
@@ -93,6 +95,7 @@ public class IdempotencyStore {
                     LOCK_PREFIX + key, "1", Duration.ofSeconds(lockSeconds));
             return Boolean.TRUE.equals(acquired);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             // Redis 不可用时放行：宁可失去防重，也不能让正常请求全被拒
             log.warn("幂等加锁失败（放行）: {}", e.getMessage());
             return true;
@@ -106,6 +109,7 @@ public class IdempotencyStore {
                     objectMapper.writeValueAsString(response),
                     Duration.ofMinutes(ttlMinutes));
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.warn("幂等结果写入失败（不影响本次响应）: {}", e.getMessage());
         } finally {
             unlock(key);
@@ -117,6 +121,7 @@ public class IdempotencyStore {
         try {
             redis.delete(LOCK_PREFIX + key);
         } catch (Exception e) {
+            RedisShortCircuitException.rethrowIf(e);   // 短路必须冒泡，不能被降级逻辑吞掉
             log.debug("幂等解锁失败（等待自动过期）: {}", e.getMessage());
         }
     }
