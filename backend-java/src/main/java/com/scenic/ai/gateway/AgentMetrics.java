@@ -90,6 +90,43 @@ public class AgentMetrics {
     }
 
     /**
+     * 2026-11-04 · LLM 调用成本（元）。
+     *
+     * <p>只在 Prometheus 里采 token 数是不够的 —— 「花了多少钱」是运营最关心的指标。
+     * 这里把按 route 归因的单次调用成本也采下来，Grafana 可以直接 sum 出总成本。
+     * 单价来自配置（不同模型不同价），计算逻辑在调用方。
+     */
+    public void cost(String route, int inputTokens, int outputTokens) {
+        double inPrice = pricePer1kInput(route);
+        double outPrice = pricePer1kOutput(route);
+        double cny = inputTokens / 1000.0 * inPrice + outputTokens / 1000.0 * outPrice;
+        if (cny > 0) {
+            registry.counter("scenic.llm.cost", "route", route).increment(cny);
+        }
+    }
+
+    /** 按 route 猜单价（元/千 token）。flash 便宜、pro 贵；未知 route 按 pro 算（保守） */
+    private double pricePer1kInput(String route) {
+        return route != null && route.contains("flash") ? 0.001 : 0.004;
+    }
+
+    private double pricePer1kOutput(String route) {
+        return route != null && route.contains("flash") ? 0.002 : 0.012;
+    }
+
+    /**
+     * 2026-11-04 · 语义缓存节省的成本（元）。
+     *
+     * <p>缓存命中时跳过整条 Agent 链路（检索+工具+模型），节省额按
+     * 「命中次数 × 单次平均模型成本」保守估算。这个指标是证明缓存价值的直接抓手。
+     */
+    public void cacheSaving(double cny) {
+        if (cny > 0) {
+            registry.counter("scenic.cache.saving", "unit", "cny").increment(cny);
+        }
+    }
+
+    /**
      * 2026-10-29（D33）· 流式路径的**估算** token（厂商不返回 usage 时的兜底）。
      *
      * <p>刻意用**独立的指标名**而不是给 {@code scenic.llm.tokens.*} 加标签：

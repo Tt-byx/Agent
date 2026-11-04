@@ -62,8 +62,11 @@ public class RoutedChatModel implements ChatModel {
                     // token 计数放在这里而不是 AgentLoop：只有路由层知道
                     // 这次回答实际由哪个候选产出，成本才能按模型（flash / pro）归因
                     if (response.tokenUsage() != null) {
-                        metrics.tokens(response.tokenUsage().inputTokenCount(),
-                                response.tokenUsage().outputTokenCount(), route.name());
+                        Integer in = response.tokenUsage().inputTokenCount();
+                        Integer out = response.tokenUsage().outputTokenCount();
+                        metrics.tokens(in, out, route.name());
+                        // 2026-11-04：顺带采成本，让 Grafana 能直接 sum 出「花了多少钱」
+                        metrics.cost(route.name(), in != null ? in : 0, out != null ? out : 0);
                     }
                     return response;
                 });

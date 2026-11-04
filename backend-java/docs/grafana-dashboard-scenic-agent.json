@@ -2,7 +2,7 @@
   "title": "灵山胜境 Agent 运行观测（P8 → Wave 3 可观测补全）",
   "uid": "scenic-agent-p8",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "10s",
   "time": {
     "from": "now-1h",
@@ -516,6 +516,116 @@
           "legendFormat": "{{dimension}}"
         }
       ]
+    },
+    {
+      "type": "stat",
+      "title": "LLM 调用总成本（元）",
+      "description": "所有 LLM 调用累计成本。按 route 归因，flash 便宜、pro 贵。2026-11-04 新增。",
+      "datasource": null,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(scenic_llm_cost_total)",
+          "datasource": null
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyCNY",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "语义缓存节省（元）",
+      "description": "缓存命中跳过整条 Agent 链路节省的成本。命中次数 × 单次平均模型成本（保守估算）。",
+      "datasource": null,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(scenic_cache_saving_total)",
+          "datasource": null
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyCNY",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "成本速率（元/秒，按 route）",
+      "description": "rate(scenic_llm_cost_total) 按 route 分组，观察不同模型的成本分布。",
+      "datasource": null,
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(scenic_llm_cost_total[5m]))",
+          "datasource": null
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyCNY"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
     }
-  ]
+  ],
+  "description": "Scenic Agent 可观测性面板。2026-11-04 新增 LLM 成本与缓存节省指标。"
 }
