@@ -102,13 +102,18 @@ llm:
     # 慢调用率到 80% 才打开，给偶发抖动留余量。
     slow-call-duration-seconds: 40
     slow-call-rate-threshold: 80
-  # P8 · 备用模型（同厂商双档降级）：主模型 deepseek-flash 异常时自动切 deepseek-v4-pro。
+  # P8 · 备用模型（同厂商双档降级）。⚠️ 2026-11-04 起两者都是 deepseek-flash（省钱），
+  # 降级已失效；上线前改回双档或换不同厂商。
   # 注意：硅基流动的 key 只用于 embedding 与 rerank，不做对话模型。
   fallback:
     enabled: true
     base-url: ${SCENIC_FALLBACK_BASE_URL:https://api.deepseek.com/v1}
     api-key: ${SCENIC_FALLBACK_API_KEY:${SCENIC_LLM_API_KEY:}}
-    model: ${SCENIC_FALLBACK_MODEL:deepseek-v4-pro}
+    # 2026-11-04（方案 A）：主备都用 deepseek-flash 省钱。
+    # ⚠️ 代价：primary 和 fallback 同一模型，**失去降级意义**（都挂都挂）。
+    # 上线前改回 deepseek-v4-pro，或者换不同厂商的模型。
+    # 实测可用模型只有：deepseek-flash / deepseek-v4-pro（没有 v4.1-flash）
+    model: ${SCENIC_FALLBACK_MODEL:deepseek-flash}
 
 # Embedding（OpenAI 兼容，当前接硅基流动 bge-m3，输出维度 1024）
 embedding:
