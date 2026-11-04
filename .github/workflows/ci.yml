@@ -24,6 +24,11 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      - name: Configure Maven mirror (Aliyun)
+        run: |
+          mkdir -p ~/.m2
+          cp .github/workflows/settings.xml ~/.m2/settings.xml
+
       - name: Build backend
         run: mvn -B -DskipTests package
         working-directory: backend-java
