@@ -157,11 +157,34 @@ public class AnalyticsServiceImpl implements AnalyticsService {
         }
     }
 
+    /**
+     * 2026-11-04（D22）修：数值与日期的解析。
+     *
+     * <p>原实现 {@code String.valueOf((long) cell.getNumericCellValue())} 有两个问题：
+     * <ol>
+     *   <li>日期单元格会被读成 Excel 序列号（如 45217），不是 2024-01-01</li>
+     *   <li>大数强制转 long 会丢小数，且 cell.toString() 对大数会输出科学计数法（1.23E10）</li>
+     * </ol>
+     *
+     * <p>修法：
+     * <ul>
+     *   <li>日期分支用 DateUtil.isCellDateFormatted 判断，格式化成 yyyy-MM-dd</li>
+     *   <li>数值用 BigDecimal.toPlainString 避免科学计数法，stripTrailingZeros 去掉多余小数</li>
+     * </ul>
+     */
     private String getCellString(Row row, int col) {
         Cell cell = row.getCell(col);
         if (cell == null) return "";
         if (cell.getCellType() == CellType.NUMERIC) {
-            return String.valueOf((long) cell.getNumericCellValue());
+            // 日期：Excel 内部存的是序列号，要按日期格式化
+            if (org.apache.poi.ss.usermodel.DateUtil.isCellDateFormatted(cell)) {
+                return new java.text.SimpleDateFormat("yyyy-MM-dd")
+                        .format(cell.getDateCellValue());
+            }
+            // 数值：toPlainString 避免 1.23E10 的科学计数法
+            return java.math.BigDecimal.valueOf(cell.getNumericCellValue())
+                    .stripTrailingZeros()
+                    .toPlainString();
         }
         return cell.toString().trim();
     }
