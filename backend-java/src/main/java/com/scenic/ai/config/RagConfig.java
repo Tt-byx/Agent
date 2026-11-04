@@ -15,6 +15,10 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Primary;
 
 import javax.sql.DataSource;
+import java.io.PrintWriter;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.time.Duration;
 
 /**
@@ -79,6 +83,19 @@ public class RagConfig {
     @Value("${pgvector.connect-timeout-ms:5000}")
     private Long pgConnectTimeoutMs;
 
+    /**
+     * 2026-11-04 新增：短路窗口。
+     *
+     * <p>连接超时只能让「一次」失败变快。但一次对话会多次访问 pgvector
+     * （语义缓存查、长期记忆召回、知识库检索、记忆写入…），
+     * 实测停掉 pgvector 后 3~4 次 × 5s 仍有 17.68s。
+     *
+     * <p>短路把「每次失败等 5s」改成「第一次失败后，窗口期内直接抛异常」。
+     * 代价是窗口期内的请求也会降级，但反正依赖已经挂了，快失败比慢失败好。
+     */
+    @Value("${pgvector.short-circuit-ms:10000}")
+    private Long pgShortCircuitMs;
+
     @Bean
     public EmbeddingModel embeddingModel() {
         warnIfKeyMissing();
@@ -116,10 +133,12 @@ public class RagConfig {
      * 又能自己控制 close，还不干扰自动配置。
      */
     public static class PgVectorDataSourceHolder {
-        private final HikariDataSource dataSource;
+        private final HikariDataSource pool;
+        private final DataSource dataSource;
 
-        PgVectorDataSourceHolder(HikariDataSource dataSource) {
-            this.dataSource = dataSource;
+        PgVectorDataSourceHolder(HikariDataSource pool, long shortCircuitMs) {
+            this.pool = pool;
+            this.dataSource = new ShortCircuitDataSource(pool, shortCircuitMs);
         }
 
         public DataSource dataSource() {
@@ -128,8 +147,104 @@ public class RagConfig {
 
         @jakarta.annotation.PreDestroy
         public void close() {
-            dataSource.close();
+            pool.close();
         }
+    }
+
+    /**
+     * 失败短路的 DataSource 包装。
+     *
+     * <p><b>要解决的问题</b>：连接超时只能让单次失败变快。一次对话会多次
+     * 取连接（缓存、记忆、检索、写入），每次挂掉都要各自等满超时 —— 实测停掉
+     * pgvector 后仍有 17.68s，其中约 12s 是重复等超时。
+     *
+     * <p><b>做法</b>：第一次取连接失败后，开启一个短路窗口（默认 10s）。
+     * 窗口期内再取连接直接抛 SQLException，完全不触碰网络。
+     * 上层的 catch 本来就是按「RAG 是增强不是必需」写的，快速降级正好。
+     *
+     * <p>窗口到点自动恢复，不用手动复位 —— 依赖好了就能用上。
+     */
+    static class ShortCircuitDataSource implements DataSource {
+        private static final org.slf4j.Logger LOG =
+                org.slf4j.LoggerFactory.getLogger(ShortCircuitDataSource.class);
+
+        private final HikariDataSource delegate;
+        private final long windowMs;
+        /** >0 = 短路截止时刻；0 = 正常 */
+        private final AtomicLong openUntilMs = new AtomicLong(0);
+
+        ShortCircuitDataSource(HikariDataSource delegate, long windowMs) {
+            this.delegate = delegate;
+            this.windowMs = windowMs;
+        }
+
+        private void ensureOpen() throws SQLException {
+            long until = openUntilMs.get();
+            if (until == 0) {
+                return;
+            }
+            long remain = until - System.currentTimeMillis();
+            if (remain > 0) {
+                throw new SQLException(
+                        "pgvector 短路中（" + remain + "ms 后自动恢复），本次直接降级");
+            }
+            // 窗口已过期，清零放行
+            openUntilMs.compareAndSet(until, 0);
+        }
+
+        private void trip(SQLException cause) {
+            long until = System.currentTimeMillis() + windowMs;
+            long prev = openUntilMs.getAndSet(until);
+            if (prev == 0) {
+                LOG.warn("[PGVECTOR] 连接失败，开启短路窗口 {}ms: {}", windowMs, cause.getMessage());
+            }
+        }
+
+        @Override
+        public Connection getConnection() throws SQLException {
+            ensureOpen();
+            try {
+                return delegate.getConnection();
+            } catch (SQLException e) {
+                trip(e);
+                throw e;
+            }
+        }
+
+        @Override
+        public Connection getConnection(String user, String password) throws SQLException {
+            ensureOpen();
+            try {
+                return delegate.getConnection(user, password);
+            } catch (SQLException e) {
+                trip(e);
+                throw e;
+            }
+        }
+
+        @Override
+        public PrintWriter getLogWriter() throws SQLException { return delegate.getLogWriter(); }
+
+        @Override
+        public void setLogWriter(PrintWriter out) throws SQLException { delegate.setLogWriter(out); }
+
+        @Override
+        public void setLoginTimeout(int seconds) throws SQLException { delegate.setLoginTimeout(seconds); }
+
+        @Override
+        public int getLoginTimeout() throws SQLException { return delegate.getLoginTimeout(); }
+
+        @Override
+        public java.util.logging.Logger getParentLogger()
+                throws java.sql.SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> iface) throws SQLException { return delegate.unwrap(iface); }
+
+        @Override
+        public boolean isWrapperFor(Class<?> iface) throws SQLException { return delegate.isWrapperFor(iface); }
     }
 
     @Bean
@@ -147,7 +262,7 @@ public class RagConfig {
         cfg.setPoolName("scenic-pgvector");
         log.info("初始化 pgvector 连接池: {}:{}/{}，连接超时 {}ms",
                 pgHost, pgPort, pgDatabase, pgConnectTimeoutMs);
-        return new PgVectorDataSourceHolder(new HikariDataSource(cfg));
+        return new PgVectorDataSourceHolder(new HikariDataSource(cfg), pgShortCircuitMs);
     }
 
     @Bean
