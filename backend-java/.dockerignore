@@ -1,8 +1,11 @@
 # 构建上下文瘦身：运行态镜像只需要 target 下的 fat jar，
 # 源码与构建脚本不必传进 Docker daemon（本地构建看不出差别，CI 上能省不少时间）。
 
-src
-pom.xml
+# 注意：不能排除 src/pom.xml —— Dockerfile 是多阶段构建（从源码编译），
+# 需要这两个文件。原来的排除规则是给 runtime 镜像（Dockerfile.runtime）用的，
+# 但 CI 里用的是多阶段构建，冲突了。
+# src
+# pom.xml
 Dockerfile
 Dockerfile.runtime
 *.log
