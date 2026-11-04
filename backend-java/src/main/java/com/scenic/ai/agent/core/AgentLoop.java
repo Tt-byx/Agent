@@ -50,6 +50,36 @@ public class AgentLoop {
     /** 单步记录 */
     public record Step(int step, String toolName, String arguments, String observation, boolean failed) {}
 
+    /**
+     * 可缓存的工具白名单。
+     *
+     * <p><b>为什么要按工具类型区分</b>：
+     * 原规则是「调用过任何工具就不写缓存」，但知识库问答必然调
+     * {@code searchKnowledgeBase} —— 结果**最需要缓存的场景反而缓存不了**。
+     * 压测显示命中路径快 23 倍，那如果只缓存闲聊类，收益就浪费了。
+     *
+     * <p>按工具类型区分后：
+     * <ul>
+     *   <li>查询类（查知识库、推荐路线、查状态）→ 答案相对稳定，可缓存</li>
+     *   <li>实时类（天气、演出时间、票价）→ 答案会变，不缓存</li>
+     * </ul>
+     *
+     * <p>即便判断失误，{@code SemanticCache.store} 里还有
+     * {@code looksRealtime} / {@code looksPersonalized} 两道兜底闸门拦时效性内容。
+     */
+    private static final java.util.Set<String> CACHEABLE_TOOLS = java.util.Set.of(
+            "searchKnowledgeBase", "recommendRoute", "checkSpotStatus");
+
+    /** 本轮用到的工具是否全部可缓存 */
+    private static boolean onlyCacheableTools(List<Step> trace) {
+        return trace.stream().allMatch(s -> CACHEABLE_TOOLS.contains(s.toolName()));
+    }
+
+    /** 本轮用到的工具名，用于日志 */
+    private static String toolNames(List<Step> trace) {
+        return trace.stream().map(Step::toolName).distinct().collect(java.util.stream.Collectors.joining(","));
+    }
+
     /** 一轮 Agent 执行结果 */
     public record Result(String answer, List<Step> steps, int stepCount, boolean converged, String stopReason) {
         public int toolCallCount() {
@@ -193,11 +223,13 @@ public class AgentLoop {
                 // D03：本轮用过工具的，答案里很可能含**时效性数据**（天气 / 演出场次 / 拥挤度），
                 // 写进 24 小时 TTL 的语义缓存，就等于把昨天下午的天气发给下一位游客。
                 // 缓存只留给「纯知识类」回答（模型直接依据系统提示词与人设作答，无工具参与）。
-                if (trace.isEmpty()) {
+                // 2026-11-04：按工具类型决定是否缓存，而不是一刀切不写。
+                // 只调了知识库类工具 → 答案稳定，可缓存；混了实时类工具 → 不缓存。
+                if (trace.isEmpty() || onlyCacheableTools(trace)) {
                     semanticCache.store(userMessage, answer);
                 } else {
-                    log.info("[CACHE] 本轮调用过 {} 次工具，跳过缓存写入（答案可能含时效性数据）",
-                            trace.size());
+                    log.info("[CACHE] 本轮调用了实时类工具（{}），跳过缓存写入",
+                            toolNames(trace));
                 }
                 log.info("Agent 收敛：共 {} 步、{} 次工具调用", step, trace.size());
                 return new Result(answer, trace, step, true, "CONVERGED");
@@ -426,10 +458,11 @@ public class AgentLoop {
                 metrics.runConverged();
                 rememberTurn(sessionId, question, answer);
                 // D03：同同步路径 —— 用过工具就不写缓存（时效性答案不能跨请求复用）
-                if (trace.isEmpty()) {
+                if (trace.isEmpty() || onlyCacheableTools(trace)) {
                     semanticCache.store(question, answer);
                 } else {
-                    log.info("[STREAM][CACHE] 本轮调用过 {} 次工具，跳过缓存写入", trace.size());
+                    log.info("[STREAM][CACHE] 本轮调用了实时类工具（{}），跳过缓存写入",
+                            toolNames(trace));
                 }
                 sink.onStepEnd(step, false);
                 sink.onDone(answer);

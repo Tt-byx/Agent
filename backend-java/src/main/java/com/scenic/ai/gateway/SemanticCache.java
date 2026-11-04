@@ -14,6 +14,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -79,6 +81,30 @@ public class SemanticCache {
     private final long ttlMillis;
     private final int maxEntries;
 
+    /**
+     * 2026-11-04 · query 向量的本地缓存。
+     *
+     * <p><b>为什么需要</b>：语义缓存的查询流程是
+     * query 文本 → 调 embedding API（算向量）→ pgvector 检索相似度。
+     * 压测发现「缓存命中」仍要 264ms，其中 100~200ms 是这次 embedding 调用。
+     * 更浪费的是：同一个 query 在 lookup() 和 store() 里会被**算两次**。
+     *
+     * <p><b>为什么可以缓存</b>：同一个文本的向量是确定的，不会变。
+     * 与「答案缓存」不同（答案可能过期），向量本身没有时效性。
+     *
+     * <p>LRU 上限 2000 条，约 8MB（1024 维 float）。永久有效，不必设 TTL。
+     */
+    private final Map<String, dev.langchain4j.data.embedding.Embedding> queryEmbeddingCache =
+            Collections.synchronizedMap(new LinkedHashMap<String, dev.langchain4j.data.embedding.Embedding>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, dev.langchain4j.data.embedding.Embedding> eldest) {
+                    return size() > MAX_EMBEDDING_CACHE;
+                }
+            });
+
+    /** 向量缓存上限。约 8MB，够覆盖日常问题的多样性。 */
+    private static final int MAX_EMBEDDING_CACHE = 2000;
+
     public SemanticCache(@Lazy @Qualifier("semanticCacheStore") EmbeddingStore<TextSegment> store,
                          EmbeddingModel embeddingModel,
                          VectorStoreAdmin vectorStoreAdmin,
@@ -99,6 +125,17 @@ public class SemanticCache {
                 enabled, minScore, ttlHours, this.maxEntries);
     }
 
+    /**
+     * 算向量，带本地缓存。
+     *
+     * <p>比直接调 {@code embeddingModel.embed(query)} 多一层内存缓存。
+     * 同一个 query 高频出现时（比如热门问题），能省掉 100~200ms 的网络往返。
+     */
+    private dev.langchain4j.data.embedding.Embedding embedCached(String query) {
+        return queryEmbeddingCache.computeIfAbsent(query,
+                q -> embeddingModel.embed(q).content());
+    }
+
     /** 命中则返回缓存的答案（已校验 TTL 与阈值） */
     public Optional<String> lookup(String query) {
         if (!enabled || query == null || query.isBlank()) {
@@ -107,7 +144,7 @@ public class SemanticCache {
         try {
             List<EmbeddingMatch<TextSegment>> matches = store.search(
                     EmbeddingSearchRequest.builder()
-                            .queryEmbedding(embeddingModel.embed(query).content())
+                            .queryEmbedding(embedCached(query))
                             .maxResults(3)          // 取 3 条：最近的一条可能已过期，跳过它再取
                             .minScore(minScore)
                             .build()
@@ -156,7 +193,7 @@ public class SemanticCache {
                     TIMESTAMP_KEY, System.currentTimeMillis()
             ));
             TextSegment segment = TextSegment.from(answer, metadata);
-            store.addAll(List.of(embeddingModel.embed(query).content()), List.of(segment));
+            store.addAll(List.of(embedCached(query)), List.of(segment));
             log.info("[CACHE] 已缓存问答对（query={}）", abbreviate(query));
             enforceCapacity();
         } catch (Exception e) {
